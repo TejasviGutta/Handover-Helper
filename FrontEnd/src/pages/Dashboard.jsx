@@ -5,8 +5,18 @@ import "../styles/dashboard.css";
 
 const SECTIONS = [
   { title: "Upload files", text: "Add handover documents to your workspace." },
-  { title: "Quizzes", text: "Test your knowledge on uploaded material." },
-  { title: "Admin", text: "Manage users and settings.", to: "/admin" },
+  {
+    title: "Quizzes",
+    text: "Create a knowledge check from uploaded material.",
+    to: "/create-quiz",
+    action: "Create quiz",
+  },
+  {
+    title: "Admin",
+    text: "Manage users and settings.",
+    to: "/admin",
+    action: "Open",
+  },
 ];
 
 export default function Dashboard() {
@@ -49,9 +59,9 @@ export default function Dashboard() {
               style={s.to ? { cursor: "pointer" } : undefined}
               onClick={s.to ? () => navigate(s.to) : undefined}
             >
-            <h2>{s.title}</h2>
-            <p>{s.text}</p>
-            <span className="dash-tag">{s.to ? "Open" : "Coming soon"}</span>
+              <h2>{s.title}</h2>
+              <p>{s.text}</p>
+              <span className="dash-tag">{s.action ?? "Coming soon"}</span>
             </section>
           ))}
         </div>
