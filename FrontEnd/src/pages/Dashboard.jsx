@@ -6,7 +6,7 @@ import "../styles/dashboard.css";
 const SECTIONS = [
   { title: "Upload files", text: "Add handover documents to your workspace." },
   { title: "Quizzes", text: "Test your knowledge on uploaded material." },
-  { title: "Admin", text: "Manage users and settings." },
+  { title: "Admin", text: "Manage users and settings.", to: "/admin" },
 ];
 
 export default function Dashboard() {
@@ -43,10 +43,15 @@ export default function Dashboard() {
 
         <div className="dash-grid">
           {SECTIONS.map((s) => (
-            <section key={s.title} className="dash-card">
-              <h2>{s.title}</h2>
-              <p>{s.text}</p>
-              <span className="dash-tag">Coming soon</span>
+            <section
+              key={s.title}
+              className="dash-card"
+              style={s.to ? { cursor: "pointer" } : undefined}
+              onClick={s.to ? () => navigate(s.to) : undefined}
+            >
+            <h2>{s.title}</h2>
+            <p>{s.text}</p>
+            <span className="dash-tag">{s.to ? "Open" : "Coming soon"}</span>
             </section>
           ))}
         </div>
