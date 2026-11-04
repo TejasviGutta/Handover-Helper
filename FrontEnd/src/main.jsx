@@ -7,6 +7,7 @@ import Login from "./pages/login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Admin from "./pages/Admin.jsx";
 import Upload from "./pages/upload.jsx";
+import CreateQuiz from "./pages/CreateQuiz.jsx";
 
 import "./index.css";
 import "./styles/login.css";
@@ -20,6 +21,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/upload" element={<Upload />} />
+        <Route path="/create-quiz" element={<CreateQuiz />} />
       </Routes>
     </BrowserRouter>
   </React.StrictMode>

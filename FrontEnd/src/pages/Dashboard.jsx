@@ -5,7 +5,16 @@ import "../styles/dashboard.css";
 import "../styles/admin.css";
 
 const SECTIONS = [
-  { title: "Upload files", text: "Add handover documents to your workspace.", to: "/upload" },  { title: "Quizzes", text: "Test your knowledge on uploaded material." },
+  {
+    title: "Upload files",
+    text: "Add handover documents to your workspace.",
+    to: "/upload",
+  },
+  {
+    title: "Quizzes",
+    text: "Create a knowledge check from uploaded material.",
+    to: "/create-quiz",
+  },
   { title: "Admin", text: "Manage users, approvals and handovers.", to: "/admin" },
 ];
 

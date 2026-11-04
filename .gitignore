@@ -1,5 +1,23 @@
 .venv/
 .env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
 chroma_data/
 __pycache__/
 *.pyc
+
+# JavaScript dependencies and build output
+**/node_modules/
+**/dist/
+**/dist-ssr/
+
+# Logs and local tooling
+*.log
+.DS_Store
+.idea/
+.vscode/
+*.local
