@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import chromadb
 
-from .embeddings import embed_text, embed_chunks
+from .embeddings import embed_prompt, embed_chunks
 
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -46,7 +46,7 @@ def search_documents(query: str, top_k: int = 3) -> list[str]:
     if count == 0:
         return []
 
-    query_vector = embed_text(query)
+    query_vector = embed_prompt(query)
 
     results = collection.query(
         query_embeddings=[query_vector],
