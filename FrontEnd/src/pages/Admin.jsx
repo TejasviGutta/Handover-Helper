@@ -64,7 +64,7 @@ export default function Admin() {
 
   async function handleSignOut() {
     await supabase.auth.signOut();
-    navigate("/login");
+    navigate("/");
   }
 
   const setRole = (id, role) =>
