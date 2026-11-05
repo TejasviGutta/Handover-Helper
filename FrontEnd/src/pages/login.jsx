@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function Login() {
+  const navigate = useNavigate();
   const [mode, setMode] = useState("signin"); // "signin" | "signup"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -43,33 +45,36 @@ export default function Login() {
     if (!validate()) return;
     setLoading(true);
 
-    if (isSignup) {
-      const { data, error } = await supabase.auth.signUp({
+    try {
+      if (isSignup) {
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: { emailRedirectTo: window.location.origin + "/dashboard" },
+        });
+        if (error) return setFormError(error.message);
+        // Supabase returns no identities when the email is already registered
+        if (data.user && data.user.identities?.length === 0) {
+          return setFormError("An account with this email already exists. Try signing in.");
+        }
+        if (!data.session) {
+          return setInfo("Account created. Check your email to confirm it, then sign in.");
+        }
+        return navigate("/dashboard");
+      }
+
+      const { error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
-        options: { emailRedirectTo: window.location.origin },
       });
-      setLoading(false);
       if (error) return setFormError(error.message);
-      // Supabase returns no identities when the email is already registered
-      if (data.user && data.user.identities?.length === 0) {
-        return setFormError("An account with this email already exists. Try signing in.");
-      }
-      if (!data.session) {
-        return setInfo("Account created. Check your email to confirm it, then sign in.");
-      }
-      // TODO: redirect to your app (email confirmation is turned off)
-      return setInfo("Account created and signed in.");
+      navigate("/dashboard");
+    } catch (err) {
+      console.error(err);
+      setFormError(err.message || "Something went wrong. Check the console.");
+    } finally {
+      setLoading(false);
     }
-
-    const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
-    setLoading(false);
-    if (error) return setFormError(error.message);
-    // TODO: redirect to your app once other pages exist
-    setInfo("Signed in successfully.");
   }
 
   async function handleForgot() {
@@ -88,7 +93,6 @@ export default function Login() {
   return (
     <main className="auth-shell">
       <div className="auth-card">
-
         <h1>{isSignup ? "Create your account" : "Welcome back"}</h1>
         <p className="subtitle">
           {isSignup
