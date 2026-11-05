@@ -12,9 +12,12 @@
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.118.0",
+    "@tailwindcss/vite": "^4.3.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "react-router-dom": "^7.18.5"
+    "react-dropzone": "^20.1.4",
+    "react-router-dom": "^7.18.5",
+    "tailwindcss": "^4.3.4"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
