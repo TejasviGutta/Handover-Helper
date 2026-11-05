@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient.js";
+import "../styles/dashboard.css";
 import "../styles/admin.css";
 
 /* ---------- Mock data (replace with Supabase/FastAPI later) ---------- */

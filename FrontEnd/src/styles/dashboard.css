@@ -60,6 +60,16 @@
   background: #eaf0ff;
   border-radius: 999px;
 }
+.dash-card-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.dash-card-link:hover {
+  border-color: var(--purple);
+  box-shadow: 0 6px 20px rgba(124, 58, 237, 0.12);
+}
 @media (max-width: 520px) {
   .dash-user span { display: none; }
 }
