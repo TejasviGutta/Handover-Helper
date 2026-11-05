@@ -1,11 +1,24 @@
-// Pull in the Tailwind styling for this page.
-import "./upload.css";
+// Pull in useState and useEffect from React.
+// useState gives the page a memory slot that can change.
+// useEffect runs code once when the page opens (used to look up who is signed in).
+import { useEffect, useState } from "react";
 
-// Pull in useState from React. It gives the page a memory slot that can change.
-import { useState } from "react";
+// Pull in page-switching tools, the same ones the Dashboard uses.
+import { useNavigate } from "react-router-dom";
 
 // Pull in the ready-made drag-and-drop tool we installed.
 import { useDropzone } from "react-dropzone";
+
+// Pull in the Supabase connection Tejasvi set up, to get the signed-in user's email
+// and to sign out.
+import { supabase } from "../lib/supabaseClient.js";
+
+// Pull in Tejasvi's styles so the top bar and background match the Dashboard.
+import "../styles/dashboard.css";
+import "../styles/admin.css";
+
+// Pull in the Tailwind classes and brand colors for this page.
+import "./upload.css";
 
 // Fake project list for the dropdown. Step 11 replaces this with real projects.
 // Each project has an id (for the computer) and a name (for people).
@@ -31,12 +44,25 @@ const ACCEPTED_TYPES = {
   "text/plain": [".txt"],
 };
 
+// The three steps of a handover, shown in the tracker at the top.
+// currentStep is the one this page belongs to (1 = Gather).
+const STEPS = ["Gather", "Learn", "Close the gaps"];
+const currentStep = 1;
+
+// The four things the guide will pull from the files, shown in the side card.
+const PULLED_ITEMS = [
+  "Unfinished work",
+  "Key contacts",
+  "Known problems",
+  "Why past decisions were made",
+];
+
 // The label and colors for each stage's status pill.
 // The stages, in order: uploading, uploaded, processing, done.
 // "failed" isn't used yet. It's for real upload errors in step 10.
 const STATUS_STYLES = {
   uploading: { label: "Uploading", className: "bg-gray-100 text-gray-700" },
-  uploaded: { label: "Uploaded", className: "bg-purple-50 text-purple-700" },
+  uploaded: { label: "Uploaded", className: "bg-brand-purple-50 text-brand-purple" },
   processing: { label: "Processing", className: "bg-blue-50 text-blue-700" },
   done: { label: "Done", className: "bg-green-50 text-green-700" },
   failed: { label: "Failed", className: "bg-red-50 text-red-700" },
@@ -86,8 +112,135 @@ function fileTypeLabel(name) {
   return labels[ext] ?? (ext ? ext.toUpperCase() : "Unknown");
 }
 
+// Small drawings (icons) used around the page.
+// Each one is an SVG, which is a tiny built-in drawing.
+// aria-hidden tells screen readers to skip them, since the text next to them says it all.
+
+// A page with a folded corner. Used for file rows and the side card.
+function DocIcon({ className }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5" />
+    </svg>
+  );
+}
+
+// An arrow pointing up out of a tray. Used in the drop box.
+function UploadIcon({ className }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M12 16V4" />
+      <path d="M7 9l5-5 5 5" />
+      <path d="M5 20h14" />
+    </svg>
+  );
+}
+
+// A circle with a check mark. Used in the side card.
+function CheckIcon({ className }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8 12.5l2.5 2.5L16 9.5" />
+    </svg>
+  );
+}
+
+// An arrow pointing right. Used on the Generate button.
+function ArrowIcon({ className }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M5 12h14" />
+      <path d="M13 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+// The step tracker: three boxes in a row. The current step is filled purple.
+function StepTracker() {
+  return (
+    // aria-label tells screen readers what this list is.
+    <ol aria-label="Handover steps" className="grid grid-cols-3 gap-2 sm:gap-3">
+      {/* Make one box for each step. */}
+      {STEPS.map((label, index) => {
+        // Steps are numbered from 1, but the list counts from 0.
+        const number = index + 1;
+        const isCurrent = number === currentStep;
+        return (
+          <li
+            key={label}
+            // aria-current marks the step the user is on, for screen readers.
+            aria-current={isCurrent ? "step" : undefined}
+            className={`flex items-center justify-center gap-2 rounded-lg px-2 py-2 text-xs sm:justify-start sm:px-3 sm:text-sm ${
+              isCurrent
+                ? "bg-brand-purple font-medium text-white shadow-sm"
+                : "bg-white text-gray-600 shadow-sm"
+            }`}
+          >
+            {/* Small circle with the step number. */}
+            <span
+              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] ${
+                isCurrent
+                  ? "bg-white/20 text-white"
+                  : "bg-brand-purple-50 text-brand-purple"
+              }`}
+            >
+              {number}
+            </span>
+            {/* Step name. */}
+            <span className="truncate">{label}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 // The page itself.
 export default function UploadPage() {
+  // Lets the page switch to another page, like the Dashboard.
+  const navigate = useNavigate();
+
+  // Memory slot for the signed-in user's email, shown in the top bar.
+  const [email, setEmail] = useState("");
+
   // Memory slot for the chosen project. Starts empty ("") since nothing is picked yet.
   // projectId is the current value. setProjectId is how we change it.
   const [projectId, setProjectId] = useState("");
@@ -102,11 +255,28 @@ export default function UploadPage() {
   // Used to show a temporary message until step 12 connects the backend.
   const [generateClicked, setGenerateClicked] = useState(false);
 
+  // When the page opens, ask Supabase who is signed in and save their email.
+  // Same as the Dashboard does.
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? ""));
+  }, []);
+
+  // Signs the user out and goes back to the landing page. Same as the Dashboard.
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+    navigate("/");
+  }
+
   // Count how many files have finished (status "done").
   const doneCount = files.filter((item) => item.status === "done").length;
 
   // The button only works when a project is picked AND at least one file is done.
   const canGenerate = projectId !== "" && doneCount > 0;
+
+  // How many side card items show a check mark.
+  // PLACEHOLDER: each finished file checks off one item, just to show the idea.
+  // Once the backend reports what it really found, use that instead.
+  const checkedCount = Math.min(doneCount, PULLED_ITEMS.length);
 
   // The hint shown next to a gray button, telling the user what's missing.
   // Empty when the button is ready.
@@ -200,201 +370,289 @@ export default function UploadPage() {
   });
 
   // Everything below is the layout: what the user sees.
-  // The className text is Tailwind styling (colors, spacing, sizes).
+  // Class names starting with "dash-" or "admin-" are Tejasvi's styles.
+  // Everything else is Tailwind.
   return (
-    // Full-height white page with padding around the edges.
-    <main className="min-h-screen bg-white px-6 py-12">
-      {/* Centered column so the content doesn't stretch across wide screens. */}
-      <div className="mx-auto max-w-5xl">
-        {/* Page title. */}
-        <h1 className="text-3xl font-semibold text-gray-900">
+    // Tejasvi's page wrapper, which gives the gradient background.
+    // "upload-page" switches on this page's own small reset from upload.css.
+    <div className="dash-shell admin-shell upload-page">
+      {/* Top bar, copied from the Dashboard so every page matches.
+          Later this could move into one shared file for all pages. */}
+      <header className="dash-top">
+        <div className="dash-brand">
+          <span className="dash-mark" aria-hidden="true" />
+          Handover Helper
+        </div>
+        <nav className="admin-nav" aria-label="Main">
+          <button type="button" onClick={() => navigate("/dashboard")}>
+            Dashboard
+          </button>
+          <button type="button" onClick={() => navigate("/admin")}>
+            Admin
+          </button>
+        </nav>
+        <div className="dash-user">
+          <span>{email}</span>
+          <button type="button" className="dash-btn" onClick={handleSignOut}>
+            Sign out
+          </button>
+        </div>
+      </header>
+
+      {/* Main content, centered so it doesn't stretch across wide screens. */}
+      <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+        {/* Page title and subtitle in white, like the Dashboard heading. */}
+        <h1 className="text-2xl font-semibold text-white sm:text-3xl">
           Gather your work
         </h1>
-        {/* Subtitle. &apos; is how you write an apostrophe safely here. */}
-        <p className="mt-2 text-gray-600">
+        <p className="mt-2 text-sm text-white/80 sm:text-base">
           Upload the files your replacement will need. We&apos;ll turn them into
           a handover guide.
         </p>
 
-        {/* Project dropdown section. */}
-        <div className="mt-8 max-w-md">
-          {/* Label above the dropdown. htmlFor links it to the dropdown below. */}
-          <label
-            htmlFor="project"
-            className="block text-sm font-medium text-gray-900"
-          >
-            Project
-          </label>
-          {/* The dropdown. It shows whatever is in projectId,
-              and updates projectId when the user picks something. */}
-          <select
-            id="project"
-            value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-            className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-200"
-          >
-            {/* Placeholder option. "disabled" means it can't be picked again. */}
-            <option value="" disabled>
-              Select a project
-            </option>
-            {/* Make one option for each project in the fake list. */}
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
+        {/* Step tracker: Gather, Learn, Close the gaps. */}
+        <div className="mt-6">
+          <StepTracker />
         </div>
 
-        {/* The drag-and-drop box. getRootProps makes it accept drops and clicks.
-            The styling switches to purple while a file is being dragged over it. */}
-        <div
-          {...getRootProps()}
-          className={`mt-6 cursor-pointer rounded-xl border-2 border-dashed px-6 py-12 text-center transition ${
-            isDragActive
-              ? "border-purple-700 bg-purple-50"
-              : "border-gray-300 bg-gray-50 hover:border-purple-400"
-          }`}
-        >
-          {/* Hidden file browser. Opens when the box is clicked. */}
-          <input {...getInputProps()} />
-          {/* Main message. Changes while a file is being dragged over. */}
-          <p className="font-medium text-gray-900">
-            {isDragActive
-              ? "Drop your files here"
-              : "Hand off your work. Drop files here or click to browse."}
-          </p>
-          {/* Smaller line listing allowed types and the size limit. */}
-          <p className="mt-2 text-sm text-gray-500">
-            PDF, Word (.docx), Excel (.xlsx), CSV, or text (.txt). 20 MB max per
-            file.
-          </p>
-        </div>
+        {/* Two columns on wide screens: upload card on the left, side card on the right.
+            On a phone they stack, with the side card at the bottom. */}
+        <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+          {/* LEFT COLUMN: one white card holding the dropdown, drop box, and file list. */}
+          <section className="rounded-xl bg-white p-5 shadow-sm sm:p-6">
+            {/* Project dropdown section. */}
+            <div>
+              {/* Label above the dropdown. htmlFor links it to the dropdown below. */}
+              <label
+                htmlFor="project"
+                className="block text-sm font-medium text-gray-900"
+              >
+                Project
+              </label>
+              {/* The dropdown. It shows whatever is in projectId,
+                  and updates projectId when the user picks something. */}
+              <select
+                id="project"
+                value={projectId}
+                onChange={(e) => setProjectId(e.target.value)}
+                className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-brand-purple focus:outline-none focus:ring-2 focus:ring-brand-purple/30"
+              >
+                {/* Placeholder option. "disabled" means it can't be picked again. */}
+                <option value="" disabled>
+                  Select a project
+                </option>
+                {/* Make one option for each project in the fake list. */}
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        {/* Red message box for blocked files. Only shows if something was blocked.
-            role="alert" makes screen readers announce it right away. */}
-        {blocked.length > 0 && (
-          <div
-            role="alert"
-            className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3"
-          >
-            {/* Heading for the message box. */}
-            <p className="text-sm font-medium text-red-800">
-              Some files weren&apos;t added:
-            </p>
-            {/* One line per blocked file: the name, then the reason. */}
-            <ul className="mt-1 space-y-1">
-              {blocked.map((item) => (
-                <li key={item.id} className="text-sm text-red-700">
-                  {item.name}: {item.message}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+            {/* The drag-and-drop box. getRootProps makes it accept drops and clicks.
+                The styling switches to purple while a file is being dragged over it. */}
+            <div
+              {...getRootProps()}
+              className={`mt-6 cursor-pointer rounded-xl border-2 border-dashed px-6 py-10 text-center transition ${
+                isDragActive
+                  ? "border-brand-purple bg-brand-purple-50"
+                  : "border-gray-300 bg-gray-50 hover:border-brand-purple/60"
+              }`}
+            >
+              {/* Hidden file browser. Opens when the box is clicked. */}
+              <input {...getInputProps()} />
+              {/* Upload icon in a small purple square. */}
+              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg bg-brand-purple-50 text-brand-purple">
+                <UploadIcon className="h-5 w-5" />
+              </div>
+              {/* Main message. Changes while a file is being dragged over. */}
+              <p className="mt-4 font-medium text-gray-900">
+                {isDragActive
+                  ? "Drop your files here"
+                  : "Hand off your work. Drop files here or click to browse."}
+              </p>
+              {/* Smaller line listing allowed types and the size limit. */}
+              <p className="mt-2 text-sm text-gray-500">
+                PDF, Word (.docx), Excel (.xlsx), CSV, or text (.txt). 20 MB max
+                per file.
+              </p>
+            </div>
 
-        {/* File list. Only shows once at least one file has been added. */}
-        {files.length > 0 && (
-          <div className="mt-8">
-            {/* Heading with the number of files. */}
-            <h2 className="text-sm font-medium text-gray-900">
-              Files ({files.length})
+            {/* Red message box for blocked files. Only shows if something was blocked.
+                role="alert" makes screen readers announce it right away. */}
+            {blocked.length > 0 && (
+              <div
+                role="alert"
+                className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3"
+              >
+                {/* Heading for the message box. */}
+                <p className="text-sm font-medium text-red-800">
+                  Some files weren&apos;t added:
+                </p>
+                {/* One line per blocked file: the name, then the reason. */}
+                <ul className="mt-1 space-y-1">
+                  {blocked.map((item) => (
+                    <li key={item.id} className="text-sm text-red-700">
+                      {item.name}: {item.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* File list. Only shows once at least one file has been added. */}
+            {files.length > 0 && (
+              <div className="mt-8">
+                {/* Heading with the number of files in a small purple pill. */}
+                <h2 className="flex items-center gap-2 text-sm font-medium text-gray-900">
+                  Files
+                  <span className="rounded-full bg-brand-purple-50 px-2 py-0.5 text-xs text-brand-purple">
+                    {files.length}
+                  </span>
+                </h2>
+                {/* The list, with a thin line between each row. */}
+                <ul className="mt-3 divide-y divide-gray-200 rounded-xl border border-gray-200">
+                  {/* Make one row for each file in the list. */}
+                  {files.map((item) => (
+                    // On a phone the row stacks into two lines.
+                    // On a wider screen it sits on one line:
+                    // icon and details, progress bar, status pill, Remove button.
+                    <li
+                      key={item.id}
+                      className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:gap-4"
+                    >
+                      {/* File icon and details. flex-1 lets this part take the spare space. */}
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
+                        {/* File icon in a small purple square. */}
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-purple-50 text-brand-purple">
+                          <DocIcon className="h-5 w-5" />
+                        </div>
+                        {/* min-w-0 lets long names shrink instead of pushing things off. */}
+                        <div className="min-w-0">
+                          {/* File name. "truncate" adds "..." if the name is too long. */}
+                          <p className="truncate font-medium text-gray-900">
+                            {item.file.name}
+                          </p>
+                          {/* Size and type, like "2.4 MB · PDF". */}
+                          <p className="text-sm text-gray-500">
+                            {formatSize(item.file.size)} ·{" "}
+                            {fileTypeLabel(item.file.name)}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Progress bar, status pill, and Remove button.
+                          On a phone they share a second line. */}
+                      <div className="flex items-center gap-3 sm:gap-4">
+                        {/* Progress bar with the percentage above it. */}
+                        <div className="min-w-0 flex-1 sm:w-32 sm:flex-none">
+                          {/* Percentage number, lined up on the right. */}
+                          <p className="text-right text-xs text-gray-500">
+                            {item.progress}%
+                          </p>
+                          {/* Gray track for the bar. */}
+                          <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
+                            {/* Purple fill. Its width matches the progress number. */}
+                            <div
+                              className="h-full rounded-full bg-brand-purple transition-all duration-300"
+                              style={{ width: `${item.progress}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Status pill. Label and colors come from STATUS_STYLES. */}
+                        <span
+                          className={`w-24 shrink-0 rounded-full px-2.5 py-1 text-center text-xs font-medium ${
+                            STATUS_STYLES[item.status].className
+                          }`}
+                        >
+                          {STATUS_STYLES[item.status].label}
+                        </span>
+
+                        {/* Remove button. Clicking it runs removeFile for this row's file. */}
+                        <button
+                          type="button"
+                          onClick={() => removeFile(item.id)}
+                          className="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 hover:border-red-300 hover:bg-red-50 hover:text-red-700"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Bottom bar with a thin line above it.
+                Hint on the left, Generate button on the right. */}
+            <div className="mt-8 flex flex-col gap-3 border-t border-gray-200 pt-6 sm:flex-row sm:items-center sm:justify-end sm:gap-4">
+              {/* Hint explaining why the button is gray. Only shows when it isn't ready. */}
+              {generateHint && (
+                <p className="text-sm text-gray-500">{generateHint}</p>
+              )}
+              {/* The Generate button.
+                  disabled: can't be clicked until canGenerate is true.
+                  The colors switch between gray (disabled) and red (ready). */}
+              <button
+                type="button"
+                onClick={handleGenerate}
+                disabled={!canGenerate}
+                className={`flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium transition ${
+                  canGenerate
+                    ? "bg-brand-red text-white hover:bg-brand-red-dark"
+                    : "cursor-not-allowed bg-gray-200 text-gray-500"
+                }`}
+              >
+                Generate handover guide
+                <ArrowIcon className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Temporary message after clicking Generate.
+                Step 12 replaces this with the real call to the backend. */}
+            {generateClicked && canGenerate && (
+              <p className="mt-3 text-sm text-green-700 sm:text-right">
+                Got it. Your handover guide will be built from {doneCount}{" "}
+                {doneCount === 1 ? "file" : "files"}.
+              </p>
+            )}
+          </section>
+
+          {/* RIGHT COLUMN: side card listing what the guide will pull from the files.
+              "self-start" keeps it from stretching to match the left card's height. */}
+          <aside className="h-fit self-start rounded-xl bg-white p-5 shadow-sm">
+            {/* Card title. */}
+            <h2 className="text-sm font-semibold text-gray-900">
+              What we&apos;ll pull from your files
             </h2>
-            {/* The list, with a thin line between each row. */}
-            <ul className="mt-3 divide-y divide-gray-200 rounded-xl border border-gray-200">
-              {/* Make one row for each file in the list. */}
-              {files.map((item) => (
-                // The row lays things out side by side:
-                // file details, progress bar, status pill, Remove button.
-                <li
-                  key={item.id}
-                  className="flex items-center justify-between gap-4 px-4 py-3"
-                >
-                  {/* File details. min-w-0 lets long names shrink instead of pushing things off.
-                      flex-1 lets this part take up the spare space. */}
-                  <div className="min-w-0 flex-1">
-                    {/* File name. "truncate" adds "..." if the name is too long. */}
-                    <p className="truncate font-medium text-gray-900">
-                      {item.file.name}
-                    </p>
-                    {/* Size and type, like "2.4 MB · PDF". */}
-                    <p className="text-sm text-gray-500">
-                      {formatSize(item.file.size)} · {fileTypeLabel(item.file.name)}
-                    </p>
-                  </div>
-
-                  {/* Progress bar with the percentage above it. */}
-                  <div className="w-32 shrink-0">
-                    {/* Percentage number, lined up on the right. */}
-                    <p className="text-right text-xs text-gray-500">
-                      {item.progress}%
-                    </p>
-                    {/* Gray track for the bar. */}
-                    <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
-                      {/* Purple fill. Its width matches the progress number. */}
-                      <div
-                        className="h-full rounded-full bg-purple-700 transition-all duration-300"
-                        style={{ width: `${item.progress}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Status pill. Label and colors come from STATUS_STYLES. */}
-                  <span
-                    className={`w-24 shrink-0 rounded-full px-2.5 py-1 text-center text-xs font-medium ${
-                      STATUS_STYLES[item.status].className
+            {/* The four items. Checked ones are green, the rest are gray. */}
+            <ul className="mt-4 space-y-3">
+              {PULLED_ITEMS.map((item, index) => {
+                // An item is checked once enough files have finished.
+                const isChecked = index < checkedCount;
+                return (
+                  <li
+                    key={item}
+                    className={`flex items-center gap-3 text-sm ${
+                      isChecked ? "text-gray-900" : "text-gray-400"
                     }`}
                   >
-                    {STATUS_STYLES[item.status].label}
-                  </span>
-
-                  {/* Remove button. Clicking it runs removeFile for this row's file. */}
-                  <button
-                    type="button"
-                    onClick={() => removeFile(item.id)}
-                    className="shrink-0 rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-red-300 hover:bg-red-50 hover:text-red-700"
-                  >
-                    Remove
-                  </button>
-                </li>
-              ))}
+                    {/* Green check when found, gray page icon when not yet. */}
+                    {isChecked ? (
+                      <CheckIcon className="h-5 w-5 shrink-0 text-green-600" />
+                    ) : (
+                      <DocIcon className="h-5 w-5 shrink-0 text-gray-300" />
+                    )}
+                    {item}
+                  </li>
+                );
+              })}
             </ul>
-          </div>
-        )}
-
-        {/* Bottom bar with a thin line above it.
-            Hint on the left, Generate button on the right. */}
-        <div className="mt-8 flex items-center justify-end gap-4 border-t border-gray-200 pt-6">
-          {/* Hint explaining why the button is gray. Only shows when it isn't ready. */}
-          {generateHint && (
-            <p className="text-sm text-gray-500">{generateHint}</p>
-          )}
-          {/* The Generate button.
-              disabled: can't be clicked until canGenerate is true.
-              The colors switch between gray (disabled) and red (ready). */}
-          <button
-            type="button"
-            onClick={handleGenerate}
-            disabled={!canGenerate}
-            className={`rounded-lg px-5 py-2.5 text-sm font-medium transition ${
-              canGenerate
-                ? "bg-red-600 text-white hover:bg-red-700"
-                : "cursor-not-allowed bg-gray-200 text-gray-500"
-            }`}
-          >
-            Generate handover guide
-          </button>
+          </aside>
         </div>
-
-        {/* Temporary message after clicking Generate.
-            Step 12 replaces this with the real call to the backend. */}
-        {generateClicked && canGenerate && (
-          <p className="mt-3 text-right text-sm text-green-700">
-            Got it. Your handover guide will be built from {doneCount}{" "}
-            {doneCount === 1 ? "file" : "files"}.
-          </p>
-        )}
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

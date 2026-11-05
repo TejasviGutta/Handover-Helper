@@ -1,1 +1,49 @@
-@import "tailwindcss";
+/* Load Tailwind WITHOUT its global reset ("preflight").
+   The full version resets heading sizes, bold text, spacing, and buttons
+   across the whole app, which can change how the other pages look.
+   This version only adds the Tailwind classes, so other pages are untouched. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Brand colors for the upload page, all in one place.
+   Change a color here and it changes everywhere on the page.
+   These come from the Figma. Swap in the official CGI codes if the team has them.
+   Tailwind turns each one into classes, like bg-brand-purple and text-brand-red. */
+@theme {
+  --color-brand-purple: #5236ab;
+  --color-brand-purple-50: #efebfa;
+  --color-brand-red: #e31937;
+  --color-brand-red-dark: #c0142f;
+}
+
+/* A small reset that only applies inside the upload page (class "upload-page").
+   It removes the browser's default spacing, bullets, and button look,
+   so the Tailwind classes on this page work as written.
+   Other pages don't have this class, so they aren't affected. */
+@layer base {
+  .upload-page *,
+  .upload-page *::before,
+  .upload-page *::after {
+    box-sizing: border-box;
+  }
+
+  .upload-page :where(h1, h2, p, ul, ol) {
+    margin: 0;
+    padding: 0;
+  }
+
+  .upload-page :where(ul, ol) {
+    list-style: none;
+  }
+
+  .upload-page :where(button, select) {
+    font: inherit;
+  }
+
+  .upload-page :where(button) {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+  }
+}
