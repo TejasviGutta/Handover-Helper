@@ -1,6 +1,9 @@
 # The starting point of the backend server.
 # Every request from the frontend comes in here first.
 
+# NEW: logging writes error details to the terminal for us to read.
+import logging
+
 # FastAPI is the tool that turns Python functions into web addresses.
 # UploadFile and File let an address receive uploaded files.
 # HTTPException lets us send back an error with a message.
@@ -12,6 +15,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Our security checks, from app/files/security.py.
 from app.files.security import MAX_FILE_SIZE, FileRejected, validate_file
+
+# NEW: Our Supabase saving code, from app/files/storage.py.
+from app.files.storage import save_file
+
+# NEW: Set up a logger for this file.
+logger = logging.getLogger(__name__)
 
 # Create the server.
 app = FastAPI(title="Handover Helper API")
@@ -36,7 +45,7 @@ def health():
 
 
 # Receives one file and runs every security check on it.
-# For now it only reports the result. Saving to Supabase comes next.
+# Only reports the result. Nothing gets saved. Handy for testing.
 @app.post("/files/check")
 async def check_file(file: UploadFile = File(...)):
     # Read at most 20 MB plus 1 byte.
@@ -51,3 +60,29 @@ async def check_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=str(error))
 
     return {"status": "accepted", **details}
+
+
+# NEW: Receives one file, checks it, and saves it to Supabase.
+# Step 4 adds a login check, so only signed-in users can upload.
+@app.post("/files/upload", status_code=201)
+async def upload_file(file: UploadFile = File(...)):
+    # Same size-safe read as above.
+    content = await file.read(MAX_FILE_SIZE + 1)
+
+    # Run every security check first. Nothing is saved unless it passes.
+    try:
+        details = validate_file(file.filename, content)
+    except FileRejected as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+    # Save the file and its record.
+    try:
+        record = save_file(content, details)
+    except Exception:
+        # Write the full error to the terminal for us,
+        # but send the user a plain message with no inside details.
+        # Error details can reveal how the system works, which helps attackers.
+        logger.exception("Saving upload failed")
+        raise HTTPException(status_code=500, detail="Upload failed. Please try again.")
+
+    return {"status": "uploaded", "document": record}
