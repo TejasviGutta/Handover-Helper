@@ -1,7 +1,8 @@
-// Pull in useState and useEffect from React.
+// Pull in useState, useEffect, and useRef from React.
 // useState gives the page a memory slot that can change.
 // useEffect runs code once when the page opens (used to look up who is signed in).
-import { useEffect, useState } from "react";
+// useRef holds things that don't change what's on screen (the uploads in progress).
+import { useEffect, useRef, useState } from "react";
 
 // Pull in page-switching tools, the same ones the Dashboard uses.
 import { useNavigate } from "react-router-dom";
@@ -19,6 +20,11 @@ import "../styles/admin.css";
 
 // Pull in the Tailwind classes and brand colors for this page.
 import "./upload.css";
+
+// The backend server's address.
+// On your computer it's 127.0.0.1:8000. When the site goes online,
+// set VITE_API_URL to the real server address and this picks it up.
+const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
 // Fake project list for the dropdown. Step 11 replaces this with real projects.
 // Each project has an id (for the computer) and a name (for people).
@@ -58,8 +64,11 @@ const PULLED_ITEMS = [
 ];
 
 // The label and colors for each stage's status pill.
-// The stages, in order: uploading, uploaded, processing, done.
-// "failed" isn't used yet. It's for real upload errors in step 10.
+// uploading: the file is being sent to the server.
+// uploaded: the file arrived, and the server is checking and saving it.
+// processing: not used yet. Comes with text extraction and PII redaction.
+// done: the server checked and saved the file.
+// failed: the server turned the file away, or the upload broke.
 const STATUS_STYLES = {
   uploading: { label: "Uploading", className: "bg-gray-100 text-gray-700" },
   uploaded: { label: "Uploaded", className: "bg-brand-purple-50 text-brand-purple" },
@@ -73,6 +82,8 @@ const STATUS_STYLES = {
 // file: the actual file the user dropped in.
 // progress: how full the bar is, from 0 to 100.
 // status: which stage the file is in (one of the names in STATUS_STYLES).
+// error: why it failed, if it did.
+// documentId: the file's id in the documents table, once saved.
 
 // Turns the drag-and-drop tool's error codes into plain messages for the user.
 function rejectionMessage(rejection) {
@@ -255,6 +266,9 @@ export default function UploadPage() {
   // Used to show a temporary message until step 12 connects the backend.
   const [generateClicked, setGenerateClicked] = useState(false);
 
+  // Keeps track of uploads still in progress, so Remove can cancel them.
+  const uploadsRef = useRef(new Map());
+
   // When the page opens, ask Supabase who is signed in and save their email.
   // Same as the Dashboard does.
   useEffect(() => {
@@ -295,26 +309,88 @@ export default function UploadPage() {
     );
   }
 
-  // Pretends to upload one file. Step 10 replaces this with the real upload.
-  function startFakeUpload(id) {
-    // Start the bar at 0%.
-    let progress = 0;
-    // Every 0.3 seconds, add a random amount (between 10% and 25%) to the bar.
-    const timer = setInterval(() => {
-      // Math.min stops it from going past 100.
-      progress = Math.min(progress + 10 + Math.random() * 15, 100);
-      updateFile(id, { progress: Math.round(progress) });
+  // Sends one file to the backend for real.
+  // The backend runs the security checks and saves it to Supabase.
+  async function startUpload(item) {
+    // Get the signed-in user's token, which proves who they are.
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      updateFile(item.id, {
+        status: "failed",
+        error: "Please sign in to upload files.",
+      });
+      return;
+    }
 
-      // Once the bar is full, stop the timer and move through the stages.
-      if (progress >= 100) {
-        clearInterval(timer);
-        updateFile(id, { status: "uploaded" });
-        // After 0.8 seconds, switch to Processing.
-        setTimeout(() => updateFile(id, { status: "processing" }), 800);
-        // After 2.5 seconds, switch to Done.
-        setTimeout(() => updateFile(id, { status: "done" }), 2500);
+    // Pack the file the way the backend expects it.
+    const formData = new FormData();
+    formData.append("file", item.file);
+
+    // XMLHttpRequest is an older way to send data, but unlike fetch,
+    // it reports upload progress, which drives the progress bar.
+    const xhr = new XMLHttpRequest();
+    uploadsRef.current.set(item.id, xhr);
+
+    // While the file is being sent: move the bar.
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        updateFile(item.id, {
+          progress: Math.round((event.loaded / event.total) * 100),
+        });
       }
-    }, 300);
+    };
+
+    // The whole file has arrived. The server is now checking and saving it.
+    xhr.upload.onload = () => {
+      updateFile(item.id, { progress: 100, status: "uploaded" });
+    };
+
+    // The server answered.
+    xhr.onload = () => {
+      uploadsRef.current.delete(item.id);
+
+      // Read the server's reply. If it isn't readable, treat it as empty.
+      let body = null;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        body = null;
+      }
+
+      if (xhr.status === 201) {
+        // 201 means saved. Keep the id for later steps.
+        updateFile(item.id, {
+          progress: 100,
+          status: "done",
+          documentId: body?.document?.id,
+        });
+      } else {
+        // Anything else is a failure. Show the server's message if it sent one,
+        // like "File type not supported".
+        updateFile(item.id, {
+          status: "failed",
+          error:
+            typeof body?.detail === "string"
+              ? body.detail
+              : "Upload failed. Please try again.",
+        });
+      }
+    };
+
+    // The server couldn't be reached at all (server off, no internet).
+    xhr.onerror = () => {
+      uploadsRef.current.delete(item.id);
+      updateFile(item.id, {
+        status: "failed",
+        error: "Couldn't reach the server. Check your connection and try again.",
+      });
+    };
+
+    // Send it, with the token attached so the backend knows who's uploading.
+    xhr.open("POST", `${API_URL}/files/upload`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.send(formData);
   }
 
   // Runs whenever files are dropped in or picked from the file browser.
@@ -332,8 +408,8 @@ export default function UploadPage() {
     // Only good files go into the file list.
     setFiles((current) => [...current, ...goodItems]);
 
-    // Start the fake upload for each good file.
-    goodItems.forEach((item) => startFakeUpload(item.id));
+    // Start the real upload for each good file.
+    goodItems.forEach((item) => startUpload(item));
 
     // Blocked files go into the message area instead.
     // Each drop replaces the old messages, so they don't pile up.
@@ -347,8 +423,14 @@ export default function UploadPage() {
   }
 
   // Removes one file from the list.
-  // It keeps every file except the one whose id matches.
+  // If it's still uploading, the upload is cancelled first.
+  // A file that already finished stays saved in Supabase for now.
   function removeFile(id) {
+    const xhr = uploadsRef.current.get(id);
+    if (xhr) {
+      xhr.abort();
+      uploadsRef.current.delete(id);
+    }
     setFiles((current) => current.filter((item) => item.id !== id));
   }
 
@@ -539,6 +621,12 @@ export default function UploadPage() {
                             {formatSize(item.file.size)} ·{" "}
                             {fileTypeLabel(item.file.name)}
                           </p>
+                          {/* If the upload failed, show why in red. */}
+                          {item.error && (
+                            <p className="mt-1 text-sm text-red-600">
+                              {item.error}
+                            </p>
+                          )}
                         </div>
                       </div>
 
@@ -553,9 +641,12 @@ export default function UploadPage() {
                           </p>
                           {/* Gray track for the bar. */}
                           <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
-                            {/* Purple fill. Its width matches the progress number. */}
+                            {/* Fill. Its width matches the progress number.
+                                Purple normally, red if the upload failed. */}
                             <div
-                              className="h-full rounded-full bg-brand-purple transition-all duration-300"
+                              className={`h-full rounded-full transition-all duration-300 ${
+                                item.status === "failed" ? "bg-red-500" : "bg-brand-purple"
+                              }`}
                               style={{ width: `${item.progress}%` }}
                             />
                           </div>
