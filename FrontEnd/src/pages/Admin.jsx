@@ -24,7 +24,8 @@ const DECISIONS = [
   { id: 3, date: "Oct 14", title: "Dropped legacy onboarding survey", project: "Onboarding Portal", by: "Priya Nair" },
 ];
 
-const TABS = ["Overview", "Users & Access", "Review & Approval", "Knowledge Gaps", "Decision Log"];
+const TABS = ["Overview", "Users & Access", "Review & Approval", "Knowledge Gaps", "Decision Log", "Activity"];
+const MANAGER_TABS = ["Users & Access", "Activity"];
 const ROLE_OPTIONS = Object.values(ROLES);
 const DONE_STATUSES = ["complete", "completed", "done", "closed"];
 
@@ -37,6 +38,14 @@ function statusClass(status) {
   if (s.includes("review")) return "pill-purple";
   if (s.includes("block") || s.includes("risk")) return "pill-red";
   return "pill-blue";
+}
+
+function describeEntry(entry) {
+  if (entry.action === "role_changed") {
+    return `Changed the role of ${entry.target_label ?? "a user"} from ${entry.details?.from ?? "?"} to ${entry.details?.to ?? "?"}`;
+  }
+  const label = entry.action.replace(/_/g, " ");
+  return entry.target_label ? `${label} · ${entry.target_label}` : label;
 }
 
 function SampleNote() {
@@ -54,11 +63,22 @@ export default function Admin() {
   const [handovers, setHandovers] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [profiles, setProfiles] = useState([]);
+  const [auditRows, setAuditRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [notice, setNotice] = useState("");
   const [reviews, setReviews] = useState(REVIEWS);
   const [gaps, setGaps] = useState(GAPS);
+
+  async function fetchAudit() {
+    const { data, error } = await supabase
+      .from("audit_log")
+      .select("id, created_at, actor_email, action, target_label, details")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) setLoadError(error.message);
+    else setAuditRows(data ?? []);
+  }
 
   useEffect(() => {
     if (status !== "ready") return;
@@ -67,7 +87,7 @@ export default function Admin() {
     async function load() {
       setLoading(true);
       setLoadError("");
-      const [h, d, p] = await Promise.all([
+      const [h, d, p, a] = await Promise.all([
         supabase
           .from("handovers")
           .select("id, project_name, departing_employee, incoming_employee, status, created_at")
@@ -76,14 +96,22 @@ export default function Admin() {
         canSeeUsers
           ? supabase.from("profiles").select("id, email, full_name, role").order("email")
           : Promise.resolve({ data: [], error: null }),
+        canSeeUsers
+          ? supabase
+              .from("audit_log")
+              .select("id, created_at, actor_email, action, target_label, details")
+              .order("created_at", { ascending: false })
+              .limit(50)
+          : Promise.resolve({ data: [], error: null }),
       ]);
       if (cancelled) return;
 
-      const firstError = h.error || d.error || p.error;
+      const firstError = h.error || d.error || p.error || a.error;
       if (firstError) setLoadError(firstError.message);
       setHandovers(h.data ?? []);
       setDocuments(d.data ?? []);
       setProfiles(p.data ?? []);
+      setAuditRows(a.data ?? []);
       setLoading(false);
     }
 
@@ -118,6 +146,7 @@ export default function Admin() {
       );
     } else {
       setNotice("Role updated.");
+      fetchAudit();
     }
   }
 
@@ -143,7 +172,7 @@ export default function Admin() {
     : 0;
   const inReviewCount = documents.filter((d) => lower(d.status).includes("review")).length;
   const pendingReviews = reviews.filter((r) => !r.outcome).length;
-  const tabs = TABS.filter((t) => t !== "Users & Access" || canSeeUsers);
+  const tabs = TABS.filter((t) => !MANAGER_TABS.includes(t) || canSeeUsers);
 
   return (
     <div className="dash-shell admin-shell">
@@ -338,6 +367,31 @@ export default function Admin() {
               ))}
             </div>
           </>
+        )}
+
+        {tab === "Activity" && canSeeUsers && (
+          <div className="table-card">
+            <table>
+              <thead>
+                <tr><th>When</th><th>Who</th><th>What</th></tr>
+              </thead>
+              <tbody>
+                {auditRows.map((e) => (
+                  <tr key={e.id}>
+                    <td>{new Date(e.created_at).toLocaleString()}</td>
+                    <td>{e.actor_email || "—"}</td>
+                    <td>{describeEntry(e)}</td>
+                  </tr>
+                ))}
+                {!loading && auditRows.length === 0 && (
+                  <tr><td colSpan={3} className="empty">No activity yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+            <p className="table-note">
+              Entries are written automatically by the database and can&apos;t be edited or deleted.
+            </p>
+          </div>
         )}
       </main>
     </div>
