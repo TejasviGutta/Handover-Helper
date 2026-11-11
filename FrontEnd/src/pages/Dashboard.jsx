@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient.js";
+import { useRole } from "../lib/useRole.js";
+import { canAccessAdmin } from "../lib/roles.js";
 import "../styles/dashboard.css";
 import "../styles/admin.css";
 
@@ -21,6 +23,8 @@ const SECTIONS = [
 export default function Dashboard() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
+  const { role, isDeparting } = useRole();
+  const showAdmin = canAccessAdmin(role, isDeparting);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? ""));
@@ -40,7 +44,9 @@ export default function Dashboard() {
         </div>
         <nav className="admin-nav" aria-label="Main">
           <button type="button" className="active">Dashboard</button>
-          <button type="button" onClick={() => navigate("/admin")}>Admin</button>
+          {showAdmin && (
+            <button type="button" onClick={() => navigate("/admin")}>Admin</button>
+          )}
         </nav>
         <div className="dash-user">
           <span>{email}</span>
@@ -55,7 +61,7 @@ export default function Dashboard() {
         <p className="dash-sub">Welcome back{email ? `, ${email}` : ""}.</p>
 
         <div className="dash-grid">
-          {SECTIONS.map((s) =>
+          {SECTIONS.filter((s) => s.to !== "/admin" || showAdmin).map((s) =>
             s.to ? (
               <Link key={s.title} to={s.to} className="dash-card dash-card-link">
                 <h2>{s.title}</h2>
