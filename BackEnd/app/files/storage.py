@@ -41,11 +41,12 @@ def get_client():
     return create_client(url, key)
 
 
-def save_file(content, details, uploaded_by=None, handover_id=None):
+def save_file(content, details, uploaded_by=None, handover_id=None, status="uploaded"):
     """Saves one file to the bucket and records it in the documents table.
 
     content: the file's bytes.
     details: what validate_file returned (storage name, original name, ending, size).
+    status: the file's stage, like "uploaded" or "parsed".
     Returns the new row from the documents table.
     """
     client = get_client()
@@ -73,7 +74,7 @@ def save_file(content, details, uploaded_by=None, handover_id=None):
                     "storage_path": storage_name,
                     "file_type": details["extension"],
                     "file_size": details["size"],
-                    "status": "uploaded",
+                    "status": status,
                     "uploaded_by": uploaded_by,
                 }
             )
