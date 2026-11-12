@@ -41,12 +41,22 @@ def get_client():
     return create_client(url, key)
 
 
-def save_file(content, details, uploaded_by=None, handover_id=None, status="uploaded"):
+def save_file(
+    content,
+    details,
+    uploaded_by=None,
+    handover_id=None,
+    status="uploaded",
+    redacted_text=None,
+    redaction_summary=None,
+):
     """Saves one file to the bucket and records it in the documents table.
 
     content: the file's bytes.
     details: what validate_file returned (storage name, original name, ending, size).
-    status: the file's stage, like "uploaded" or "parsed".
+    status: the file's stage, like "uploaded", "parsed", or "redacted".
+    redacted_text: the file's text with personal info hidden.
+    redaction_summary: how many of each kind of personal info were hidden.
     Returns the new row from the documents table.
     """
     client = get_client()
@@ -76,6 +86,8 @@ def save_file(content, details, uploaded_by=None, handover_id=None, status="uplo
                     "file_size": details["size"],
                     "status": status,
                     "uploaded_by": uploaded_by,
+                    "redacted_text": redacted_text,
+                    "redaction_summary": redaction_summary,
                 }
             )
             .execute()
