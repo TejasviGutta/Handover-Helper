@@ -1,25 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient.js";
-import "../styles/dashboard.css";
+import { useRole } from "../lib/useRole.js";
+import { ROLES, ADMIN_ROLES } from "../lib/roles.js";
 import "../styles/admin.css";
 
-/* ---------- Mock data (replace with Supabase/FastAPI later) ---------- */
-const PROJECTS = [
-  { id: 1, name: "Q4 Sales Pipeline", owner: "Maya Chen", successor: "Dev Patel", progress: 82, status: "On track" },
-  { id: 2, name: "Payments Service", owner: "Luis Ortega", successor: "Sara Kim", progress: 45, status: "At risk" },
-  { id: 3, name: "Onboarding Portal", owner: "Priya Nair", successor: "Tom Reed", progress: 100, status: "Complete" },
-  { id: 4, name: "Data Warehouse Migration", owner: "Ahmed Khan", successor: "Lena Wu", progress: 18, status: "Behind" },
-];
-
-const USERS = [
-  { id: 1, name: "Maya Chen", email: "maya@company.com", role: "Admin" },
-  { id: 2, name: "Dev Patel", email: "dev@company.com", role: "Employee" },
-  { id: 3, name: "Luis Ortega", email: "luis@company.com", role: "Manager" },
-  { id: 4, name: "Sara Kim", email: "sara@company.com", role: "Employee" },
-  { id: 5, name: "Tom Reed", email: "tom@company.com", role: "Viewer" },
-];
-
+/* ---------- Sample data (these tabs are connected later by teammates) ---------- */
 const REVIEWS = [
   { id: 1, item: "Payments runbook.pdf", project: "Payments Service", by: "Luis Ortega", flag: "Contains 3 redacted items" },
   { id: 2, item: "Vendor contacts.xlsx", project: "Q4 Sales Pipeline", by: "Maya Chen", flag: "Confidential steps removed" },
@@ -38,43 +24,155 @@ const DECISIONS = [
   { id: 3, date: "Oct 14", title: "Dropped legacy onboarding survey", project: "Onboarding Portal", by: "Priya Nair" },
 ];
 
-const TABS = ["Overview", "Users & Access", "Review & Approval", "Knowledge Gaps", "Decision Log"];
-const ROLES = ["Admin", "Manager", "Employee", "Viewer"];
+const TABS = ["Overview", "Users & Access", "Review & Approval", "Knowledge Gaps", "Decision Log", "Activity"];
+const MANAGER_TABS = ["Users & Access", "Activity"];
+const ROLE_OPTIONS = Object.values(ROLES);
+const DONE_STATUSES = ["complete", "completed", "done", "closed"];
+
+const lower = (value) => (value ?? "").toLowerCase();
+const isDone = (status) => DONE_STATUSES.includes(lower(status));
 
 function statusClass(status) {
-  return {
-    "On track": "pill-blue",
-    "At risk": "pill-purple",
-    Behind: "pill-red",
-    Complete: "pill-green",
-  }[status] ?? "pill-blue";
+  const s = lower(status);
+  if (isDone(s) || s === "approved") return "pill-green";
+  if (s.includes("review")) return "pill-purple";
+  if (s.includes("block") || s.includes("risk")) return "pill-red";
+  return "pill-blue";
+}
+
+function describeEntry(entry) {
+  if (entry.action === "role_changed") {
+    return `Changed the role of ${entry.target_label ?? "a user"} from ${entry.details?.from ?? "?"} to ${entry.details?.to ?? "?"}`;
+  }
+  const label = entry.action.replace(/_/g, " ");
+  return entry.target_label ? `${label} · ${entry.target_label}` : label;
+}
+
+function SampleNote() {
+  return <p className="admin-sample">Sample data until this tab is connected to the database.</p>;
 }
 
 export default function Admin() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
+  const { status, user, role: myRole } = useRole();
+  const email = user?.email ?? "";
+  const canSeeUsers = ADMIN_ROLES.includes(myRole);
+  const canEditRoles = myRole === ROLES.ADMIN;
+
   const [tab, setTab] = useState(TABS[0]);
-  const [users, setUsers] = useState(USERS);
+  const [handovers, setHandovers] = useState([]);
+  const [documents, setDocuments] = useState([]);
+  const [profiles, setProfiles] = useState([]);
+  const [auditRows, setAuditRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [notice, setNotice] = useState("");
   const [reviews, setReviews] = useState(REVIEWS);
   const [gaps, setGaps] = useState(GAPS);
 
+  async function fetchAudit() {
+    const { data, error } = await supabase
+      .from("audit_log")
+      .select("id, created_at, actor_email, action, target_label, details")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) setLoadError(error.message);
+    else setAuditRows(data ?? []);
+  }
+
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? ""));
-  }, []);
+    if (status !== "ready") return;
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setLoadError("");
+      const [h, d, p, a] = await Promise.all([
+        supabase
+          .from("handovers")
+          .select("id, project_name, departing_employee, incoming_employee, status, created_at")
+          .order("created_at", { ascending: false }),
+        supabase.from("documents").select("id, handover_id, status"),
+        canSeeUsers
+          ? supabase.from("profiles").select("id, email, full_name, role").order("email")
+          : Promise.resolve({ data: [], error: null }),
+        canSeeUsers
+          ? supabase
+              .from("audit_log")
+              .select("id, created_at, actor_email, action, target_label, details")
+              .order("created_at", { ascending: false })
+              .limit(50)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (cancelled) return;
+
+      const firstError = h.error || d.error || p.error || a.error;
+      if (firstError) setLoadError(firstError.message);
+      setHandovers(h.data ?? []);
+      setDocuments(d.data ?? []);
+      setProfiles(p.data ?? []);
+      setAuditRows(a.data ?? []);
+      setLoading(false);
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [status, canSeeUsers]);
 
   async function handleSignOut() {
     await supabase.auth.signOut();
-    navigate("/");
+    navigate("/login");
   }
 
-  const setRole = (id, role) =>
-    setUsers((u) => u.map((x) => (x.id === id ? { ...x, role } : x)));
+  async function changeRole(id, newRole) {
+    const previous = profiles;
+    setNotice("");
+    setProfiles((list) => list.map((p) => (p.id === id ? { ...p, role: newRole } : p)));
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .update({ role: newRole })
+      .eq("id", id)
+      .select("id");
+
+    if (error || !data || data.length === 0) {
+      setProfiles(previous);
+      setNotice(
+        error
+          ? `Could not change role: ${error.message}`
+          : "Could not change role. You may not have permission."
+      );
+    } else {
+      setNotice("Role updated.");
+      fetchAudit();
+    }
+  }
+
   const resolveReview = (id, outcome) =>
     setReviews((r) => r.map((x) => (x.id === id ? { ...x, outcome } : x)));
   const resolveGap = (id) => setGaps((g) => g.filter((x) => x.id !== id));
 
-  const avg = Math.round(PROJECTS.reduce((s, p) => s + p.progress, 0) / PROJECTS.length);
-  const pending = reviews.filter((r) => !r.outcome).length;
+  // Progress = approved documents / all documents for that handover.
+  const rows = useMemo(
+    () =>
+      handovers.map((h) => {
+        const docs = documents.filter((d) => d.handover_id === h.id);
+        const approved = docs.filter((d) => lower(d.status) === "approved").length;
+        const progress = docs.length ? Math.round((approved / docs.length) * 100) : 0;
+        return { ...h, docCount: docs.length, approved, progress };
+      }),
+    [handovers, documents]
+  );
+
+  const activeCount = rows.filter((r) => !isDone(r.status)).length;
+  const avgProgress = rows.length
+    ? Math.round(rows.reduce((sum, r) => sum + r.progress, 0) / rows.length)
+    : 0;
+  const inReviewCount = documents.filter((d) => lower(d.status).includes("review")).length;
+  const pendingReviews = reviews.filter((r) => !r.outcome).length;
+  const tabs = TABS.filter((t) => !MANAGER_TABS.includes(t) || canSeeUsers);
 
   return (
     <div className="dash-shell admin-shell">
@@ -98,7 +196,7 @@ export default function Admin() {
         <p className="dash-sub">Manage handovers, people and approvals.</p>
 
         <div className="admin-tabs" role="tablist">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               key={t}
               role="tab"
@@ -107,107 +205,192 @@ export default function Admin() {
               onClick={() => setTab(t)}
             >
               {t}
-              {t === "Review & Approval" && pending > 0 && <span className="badge">{pending}</span>}
+              {t === "Review & Approval" && pendingReviews > 0 && (
+                <span className="badge">{pendingReviews}</span>
+              )}
             </button>
           ))}
         </div>
 
+        {loadError && (
+          <div className="notice notice-error" role="alert">
+            Some data could not be loaded: {loadError}. This is usually a Supabase permission
+            (RLS) setting.
+          </div>
+        )}
+
         {tab === "Overview" && (
           <>
             <div className="stat-row">
-              <div className="stat"><span>{PROJECTS.length}</span>Active handovers</div>
-              <div className="stat"><span>{avg}%</span>Average progress</div>
-              <div className="stat"><span>{pending}</span>Awaiting approval</div>
-              <div className="stat"><span>{gaps.length}</span>Open knowledge gaps</div>
+              <div className="stat"><span>{activeCount}</span>Active handovers</div>
+              <div className="stat"><span>{avgProgress}%</span>Average progress</div>
+              <div className="stat"><span>{inReviewCount}</span>Documents in review</div>
+              <div className="stat"><span>{canSeeUsers ? profiles.length : "—"}</span>Team members</div>
             </div>
-            <div className="dash-grid">
-              {PROJECTS.map((p) => (
-                <section key={p.id} className="dash-card">
-                  <div className="card-head">
-                    <h2>{p.name}</h2>
-                    <span className={`pill ${statusClass(p.status)}`}>{p.status}</span>
+
+            {loading ? (
+              <p className="admin-loading">Loading handovers…</p>
+            ) : rows.length === 0 ? (
+              <div className="list">
+                <p className="empty">No handovers yet.</p>
+              </div>
+            ) : (
+              <div className="dash-grid">
+                {rows.map((p) => (
+                  <section key={p.id} className="dash-card">
+                    <div className="card-head">
+                      <h2>{p.project_name || "Untitled project"}</h2>
+                      <span className={`pill ${statusClass(p.status)}`}>
+                        {(p.status || "no status").replace(/[_-]+/g, " ")}
+                      </span>
+                    </div>
+                    <p>{p.departing_employee || "—"} → {p.incoming_employee || "—"}</p>
+                    <div
+                      className="progress"
+                      role="progressbar"
+                      aria-valuenow={p.progress}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                    >
+                      <div className="progress-fill" style={{ width: `${p.progress}%` }} />
+                    </div>
+                    <small className="progress-label">
+                      {p.docCount
+                        ? `${p.progress}% · ${p.approved} of ${p.docCount} documents approved`
+                        : "No documents uploaded yet"}
+                    </small>
+                  </section>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {tab === "Users & Access" && canSeeUsers && (
+          <>
+            {notice && <div className="notice" role="status">{notice}</div>}
+            <div className="table-card">
+              <table>
+                <thead>
+                  <tr><th>Name</th><th>Email</th><th>Role</th></tr>
+                </thead>
+                <tbody>
+                  {profiles.map((u) => (
+                    <tr key={u.id}>
+                      <td>{u.full_name || "—"}</td>
+                      <td><a href={`mailto:${u.email}`}>{u.email}</a></td>
+                      <td>
+                        <select
+                          value={u.role ?? ""}
+                          disabled={!canEditRoles || u.id === user?.id}
+                          title={
+                            u.id === user?.id
+                              ? "You can't change your own role"
+                              : canEditRoles
+                                ? ""
+                                : "Only admins can change roles"
+                          }
+                          onChange={(e) => changeRole(u.id, e.target.value)}
+                        >
+                          {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                  {!loading && profiles.length === 0 && (
+                    <tr><td colSpan={3} className="empty">No users found.</td></tr>
+                  )}
+                </tbody>
+              </table>
+              {!canEditRoles && (
+                <p className="table-note">Only admins can change roles.</p>
+              )}
+            </div>
+          </>
+        )}
+
+        {tab === "Review & Approval" && (
+          <>
+            <SampleNote />
+            <div className="list">
+              {reviews.map((r) => (
+                <div key={r.id} className="list-item">
+                  <div>
+                    <strong>{r.item}</strong>
+                    <p>{r.project} · submitted by {r.by}</p>
+                    <span className="pill pill-purple">{r.flag}</span>
                   </div>
-                  <p>{p.owner} → {p.successor}</p>
-                  <div className="progress" role="progressbar" aria-valuenow={p.progress} aria-valuemin={0} aria-valuemax={100}>
-                    <div className="progress-fill" style={{ width: `${p.progress}%` }} />
-                  </div>
-                  <small className="progress-label">{p.progress}% complete</small>
-                </section>
+                  {r.outcome ? (
+                    <span className={`pill ${r.outcome === "Approved" ? "pill-green" : "pill-red"}`}>{r.outcome}</span>
+                  ) : (
+                    <div className="actions">
+                      <button className="btn-solid" onClick={() => resolveReview(r.id, "Approved")}>Approve</button>
+                      <button className="dash-btn small" onClick={() => resolveReview(r.id, "Rejected")}>Reject</button>
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           </>
         )}
 
-        {tab === "Users & Access" && (
-          <div className="table-card">
-            <table>
-              <thead><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr></thead>
-              <tbody>
-                {users.map((u) => (
-                  <tr key={u.id}>
-                    <td>{u.name}</td>
-                    <td><a href={`mailto:${u.email}`}>{u.email}</a></td>
-                    <td>
-                      <select value={u.role} onChange={(e) => setRole(u.id, e.target.value)}>
-                        {ROLES.map((r) => <option key={r}>{r}</option>)}
-                      </select>
-                    </td>
-                    <td className="right"><button className="dash-btn small">Remove</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {tab === "Review & Approval" && (
-          <div className="list">
-            {reviews.map((r) => (
-              <div key={r.id} className="list-item">
-                <div>
-                  <strong>{r.item}</strong>
-                  <p>{r.project} · submitted by {r.by}</p>
-                  <span className="pill pill-purple">{r.flag}</span>
-                </div>
-                {r.outcome ? (
-                  <span className={`pill ${r.outcome === "Approved" ? "pill-green" : "pill-red"}`}>{r.outcome}</span>
-                ) : (
-                  <div className="actions">
-                    <button className="btn-solid" onClick={() => resolveReview(r.id, "Approved")}>Approve</button>
-                    <button className="dash-btn small" onClick={() => resolveReview(r.id, "Rejected")}>Reject</button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
         {tab === "Knowledge Gaps" && (
-          <div className="list">
-            {gaps.length === 0 && <p className="empty">No open gaps. Nice work.</p>}
-            {gaps.map((g) => (
-              <div key={g.id} className="list-item">
-                <div>
-                  <strong>{g.question}</strong>
-                  <p>{g.project} · asked {g.asked} times in Q&amp;A chat</p>
+          <>
+            <SampleNote />
+            <div className="list">
+              {gaps.length === 0 && <p className="empty">No open gaps. Nice work.</p>}
+              {gaps.map((g) => (
+                <div key={g.id} className="list-item">
+                  <div>
+                    <strong>{g.question}</strong>
+                    <p>{g.project} · asked {g.asked} times in Q&amp;A chat</p>
+                  </div>
+                  <button className="dash-btn small" onClick={() => resolveGap(g.id)}>Mark answered</button>
                 </div>
-                <button className="dash-btn small" onClick={() => resolveGap(g.id)}>Mark answered</button>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </>
         )}
 
         {tab === "Decision Log" && (
-          <div className="timeline">
-            {DECISIONS.map((d) => (
-              <div key={d.id} className="timeline-item">
-                <span className="timeline-date">{d.date}</span>
-                <div>
-                  <strong>{d.title}</strong>
-                  <p>{d.project} · {d.by}</p>
+          <>
+            <SampleNote />
+            <div className="timeline">
+              {DECISIONS.map((d) => (
+                <div key={d.id} className="timeline-item">
+                  <span className="timeline-date">{d.date}</span>
+                  <div>
+                    <strong>{d.title}</strong>
+                    <p>{d.project} · {d.by}</p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
+          </>
+        )}
+
+        {tab === "Activity" && canSeeUsers && (
+          <div className="table-card">
+            <table>
+              <thead>
+                <tr><th>When</th><th>Who</th><th>What</th></tr>
+              </thead>
+              <tbody>
+                {auditRows.map((e) => (
+                  <tr key={e.id}>
+                    <td>{new Date(e.created_at).toLocaleString()}</td>
+                    <td>{e.actor_email || "—"}</td>
+                    <td>{describeEntry(e)}</td>
+                  </tr>
+                ))}
+                {!loading && auditRows.length === 0 && (
+                  <tr><td colSpan={3} className="empty">No activity yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+            <p className="table-note">
+              Entries are written automatically by the database and can&apos;t be edited or deleted.
+            </p>
           </div>
         )}
       </main>
