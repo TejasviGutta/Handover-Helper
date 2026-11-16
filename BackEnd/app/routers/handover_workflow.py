@@ -11,6 +11,8 @@ from ..schemas import CurrentUser, Role
 from ..supabase_client import supabase_admin
 
 router = APIRouter(prefix="/handovers/{handover_id}", tags=["handover workflow"])
+directory_router = APIRouter(tags=["handover workflow"])
+PARTICIPANT_COLUMNS = "id,departing_employee,incoming_employee"
 
 User = Annotated[CurrentUser, Depends(get_current_user)]
 GuideStatus = Literal["draft", "in_review", "changes_requested", "approved"]
@@ -59,16 +61,59 @@ class Guide(BaseModel):
     reviewed_at: datetime | None
 
 
+class HandoverSummary(BaseModel):
+    id: UUID
+    project_name: str
+    can_write: bool
+    can_edit: bool
+    can_review: bool
+    can_approve: bool
+
+
 def matches_employee(user: CurrentUser, employee_email: str | None) -> bool:
     if not (user.email_verified and user.email and employee_email):
         return False
     return user.email.strip().lower() == employee_email.strip().lower()
 
 
+@directory_router.get("/handovers", response_model=list[HandoverSummary])
+def list_workflow_handovers(user: User):
+    admin = user.role == Role.admin
+    can_write = user.role != Role.viewer
+    handovers = []
+    page_size = 200
+    offset = 0
+    while True:
+        rows = (
+            supabase_admin.table("handovers")
+            .select(f"project_name,{PARTICIPANT_COLUMNS}")
+            .order("project_name")
+            .order("id")
+            .range(offset, offset + page_size - 1)
+            .execute()
+            .data
+        )
+        for row in rows:
+            departing = matches_employee(user, row["departing_employee"])
+            incoming = matches_employee(user, row["incoming_employee"])
+            if admin or departing or incoming:
+                handovers.append(HandoverSummary(
+                    id=row["id"],
+                    project_name=row["project_name"] or "Untitled handover",
+                    can_write=can_write,
+                    can_edit=can_write and (admin or departing),
+                    can_review=can_write and (admin or incoming),
+                    can_approve=can_write and departing,
+                ))
+        if len(rows) < page_size:
+            return handovers
+        offset += page_size
+
+
 def handover_access(handover_id: UUID, user: User) -> dict:
     rows = (
         supabase_admin.table("handovers")
-        .select("id,departing_employee,incoming_employee")
+        .select(PARTICIPANT_COLUMNS)
         .eq("id", str(handover_id))
         .limit(1)
         .execute()
@@ -205,16 +250,19 @@ def submit_guide(body: GuideRevision, handover: Handover, user: User):
 
 @router.post("/guide/review", response_model=Guide)
 def review_guide(body: GuideReview, handover: Handover, user: User):
-    if user.role == Role.viewer or (
-        user.role != Role.admin and not matches_employee(user, handover["incoming_employee"])
+    if body.outcome == "approved":
+        if user.role == Role.viewer or not matches_employee(user, handover["departing_employee"]):
+            raise HTTPException(403, "Only the departing employee can approve the guide")
+    elif user.role == Role.viewer or not (
+        user.role == Role.admin or matches_employee(user, handover["incoming_employee"])
     ):
-        raise HTTPException(403, "Only the successor or an admin can review the guide")
+        raise HTTPException(403, "You cannot request changes for this guide")
     if body.outcome == "changes_requested" and not body.comment:
         raise HTTPException(422, "A comment is required when requesting changes")
     guide = get_saved_guide(handover["id"])
     if guide["revision"] != body.revision or guide["status"] != "in_review":
         raise HTTPException(409, "Guide revision or status changed. Reload the guide and try again.")
-    if guide["submitted_by"] == user.id:
+    if body.outcome == "changes_requested" and guide["submitted_by"] == user.id:
         raise HTTPException(403, "The submitter cannot review their own guide")
     return update_guide(
         handover["id"],

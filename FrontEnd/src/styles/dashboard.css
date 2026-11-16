@@ -70,6 +70,11 @@
   border-color: var(--purple);
   box-shadow: 0 6px 20px rgba(124, 58, 237, 0.12);
 }
+.dash-handover-links { margin-top: 28px; }
+.dash-handover-links h2 { font-size: 1.1rem; margin: 0 0 8px; }
+.dash-handover-links ul { margin: 0; padding-inline-start: 20px; }
+.dash-handover-links li + li { margin-top: 6px; }
+.dash-handover-links a, .admin-handover-link { color: inherit; text-underline-offset: .2em; }
 @media (max-width: 520px) {
   .dash-user span { display: none; }
 }
