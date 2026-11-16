@@ -42,7 +42,10 @@ def get_current_user(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No profile for this user")
 
     return CurrentUser(
-        id=auth_user["id"], email=auth_user.get("email"), role=rows[0]["role"]
+        id=auth_user["id"],
+        email=auth_user.get("email"),
+        role=rows[0]["role"],
+        email_verified=bool(auth_user.get("email_confirmed_at")),
     )
 
 

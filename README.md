@@ -34,3 +34,35 @@ npm run build
 ```
 
 Real `.env` files, dependencies, and generated build output are intentionally excluded from Git.
+
+## Decision log and guide review API
+
+The API uses the existing Supabase authentication and profiles. Apply
+`BackEnd/supabase/migrations/202611150001_handover_workflow.sql` after the shared
+handover schema is installed. This ZIP does not include that schema. The API
+expects `public.handovers` to have a UUID primary key named `id` and text
+columns `departing_employee` and `incoming_employee` containing the respective
+users' Supabase Auth email addresses. Participant access matches confirmed
+sign-in emails, ignoring case and surrounding whitespace. Decision and review
+attribution use the authenticated account's UUID.
+
+From `BackEnd`, install its `requirements.txt`, configure `SUPABASE_URL`,
+`SUPABASE_PUBLISHABLE_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` in the backend
+environment, then run `python -m uvicorn app.main:app --reload`. Open
+`http://localhost:8000/docs`. Each route requires an
+`Authorization: Bearer <Supabase access token>` header.
+
+All routes below start with `/handovers/{handover_id}`. The outgoing owner,
+successor, and admins can read records. Viewers with access can only read.
+
+| Method and path | Behavior |
+| --- | --- |
+| `GET /decisions` | List decisions newest first. Use `offset` and `limit` to page results. |
+| `POST /decisions` | Record a decision with `title`, `decision_date` (YYYY-MM-DD), and optional `details`. The API records the signed-in user as the author. |
+| `GET /guide` | Get guide content, status, revision, and latest review metadata. |
+| `PUT /guide` | The outgoing owner or an admin saves `content`. Send revision `0` to create the draft or the current revision to edit a draft or a guide with requested changes. |
+| `POST /guide/submit` | The outgoing owner or an admin sends the current `revision` to start a review. |
+| `POST /guide/review` | The successor or an admin sends the current `revision`, an `outcome` of `approved` or `changes_requested`, and a `comment` (required for changes). The submitter cannot review their own submission. |
+
+Use the returned revision for the next mutation. A stale revision or an
+invalid transition returns HTTP 409. An approved guide is read-only.
