@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient.js";
+import "../styles/dashboard.css";
+import "../styles/admin.css";
 import "../styles/create-quiz.css";
 
 const DOCUMENTS = [
@@ -227,58 +229,50 @@ export default function CreateQuiz() {
   ).length;
 
   return (
-    <div className="cq-shell">
-      <header className="cq-top">
-        <Link className="cq-brand" to="/dashboard">
-          <span className="cq-mark" aria-hidden="true" />
+    <div className="dash-shell admin-shell cq-shell">
+      <header className="dash-top">
+        <Link className="dash-brand cq-brand" to="/dashboard">
+          <span className="dash-mark" aria-hidden="true" />
           Handover Helper
         </Link>
-        <div className="cq-user">
+        <nav className="admin-nav cq-nav" aria-label="Main">
+          <button type="button" onClick={() => navigate("/dashboard")}>Dashboard</button>
+        </nav>
+        <div className="dash-user">
           <span>{email}</span>
-          <button type="button" className="cq-sign-out" onClick={handleSignOut}>
+          <button type="button" className="dash-btn" onClick={handleSignOut}>
             Sign out
           </button>
         </div>
       </header>
 
-      <div className="cq-main">
-        <nav className="cq-steps" aria-label="Handover progress">
-          <span>✓ <b>Gather</b></span>
-          <span className="cq-active" aria-current="step">2 <b>Learn</b></span>
-          <span>3 <b>Close the gaps</b></span>
-        </nav>
-
-        <section className="cq-hero">
-          <p>KNOWLEDGE TRANSFER</p>
-          <h1>{previewMode ? "Preview your quiz" : "Create a knowledge check"}</h1>
-          <div>
-            Help the next person understand the work, spot gaps, and feel ready
-            to take over.
-          </div>
-        </section>
-
-        <div className="cq-demo">
-          <strong>Frontend demo</strong> · Source files are examples. AI question
-          generation and team sharing will be connected later.
-        </div>
+      <main className="dash-main admin-main cq-main">
+        <h1>{previewMode ? "Preview your quiz" : "Create a knowledge check"}</h1>
+        <p className="dash-sub">
+          {previewMode ? "Answer the questions and check your score." : "Build a quiz to help the incoming team member take over."}
+        </p>
+        {!previewMode && (
+          <ol className="cq-steps" aria-label="Handover steps">
+            <li><span aria-hidden="true">1</span>Gather</li>
+            <li aria-current="step"><span aria-hidden="true">2</span>Learn</li>
+            <li><span aria-hidden="true">3</span>Close the gaps</li>
+          </ol>
+        )}
         <div className="cq-status" role="status" aria-live="polite">
           {message}
         </div>
 
         {previewMode ? (
-          <main className="cq-preview">
-            <div className="cq-section-head cq-preview-head">
-              <div>
-                <p className="cq-eyebrow">LEARNER VIEW</p>
-                <h2>{title}</h2>
-              </div>
+          <div className="cq-preview">
+            <div className="dash-card cq-section-head cq-preview-head">
+              <h2>{title}</h2>
               <button type="button" onClick={() => setPreviewMode(false)}>
                 Back to editor
               </button>
             </div>
 
             {questions.map((question, index) => (
-              <section className="cq-card" key={question.id}>
+              <section className="dash-card cq-card" key={question.id}>
                 <h3>{index + 1}. {question.prompt}</h3>
                 <fieldset>
                   <legend className="cq-sr-only">
@@ -336,14 +330,13 @@ export default function CreateQuiz() {
                 Check answers
               </button>
             )}
-          </main>
+          </div>
         ) : (
-          <main className="cq-layout">
+          <div className="cq-layout">
             <div>
-              <section className="cq-card">
+              <section className="dash-card cq-card">
                 <div className="cq-section-head">
                   <h2>Quiz details</h2>
-                  <span className="cq-tag">Draft</span>
                 </div>
 
                 <label htmlFor="quiz-title">Quiz title</label>
@@ -362,7 +355,6 @@ export default function CreateQuiz() {
                         checked={sources.includes(file)}
                         onChange={() => toggleSource(file)}
                       />
-                      <span className="cq-file-icon" aria-hidden="true">▤</span>
                       {file}
                     </label>
                   ))}
@@ -399,8 +391,7 @@ export default function CreateQuiz() {
 
                 <div className="cq-generate">
                   <small>
-                    Demo questions let you try the editor. Loading replaces
-                    current questions.
+                    Sample questions use example content and replace your current questions.
                   </small>
                   <button
                     type="button"
@@ -415,7 +406,7 @@ export default function CreateQuiz() {
 
               <section>
                 <div className="cq-section-head cq-question-heading">
-                  <h2>Questions <span className="cq-tag">{questions.length}</span></h2>
+                  <h2>Questions <span className="dash-tag">{questions.length}</span></h2>
                   <button
                     type="button"
                     onClick={() => setQuestions((current) => [...current, blankQuestion()])}
@@ -425,18 +416,14 @@ export default function CreateQuiz() {
                 </div>
 
                 {!questions.length && (
-                  <div className="cq-empty">
-                    <span aria-hidden="true">▤</span>
-                    <h3>Your knowledge check starts here</h3>
-                    <p>
-                      Load sample questions or add your own.<br />
-                      You can edit every question and answer.
-                    </p>
+                  <div className="dash-card cq-card cq-empty">
+                    <h3>No questions yet</h3>
+                    <p>Load sample questions or add your own.</p>
                   </div>
                 )}
 
                 {questions.map((question, questionIndex) => (
-                  <article className="cq-card" key={question.id}>
+                  <article className="dash-card cq-card" key={question.id}>
                     <div className="cq-section-head">
                       <h3>Question {questionIndex + 1}</h3>
                       <button
@@ -501,7 +488,7 @@ export default function CreateQuiz() {
                 ))}
               </section>
 
-              <footer className="cq-actions">
+              <footer className="dash-card cq-actions">
                 <button type="button" onClick={saveDraft}>Save draft</button>
                 <button type="button" disabled={!quizIsValid} onClick={downloadQuiz}>
                   Download quiz
@@ -525,22 +512,8 @@ export default function CreateQuiz() {
             </div>
 
             <aside>
-              <section className="cq-card cq-sidebar">
-                <p className="cq-eyebrow">A BETTER HANDOVER</p>
-                <h2>Test what matters</h2>
-                <p>Focus on the knowledge someone needs to continue the work.</p>
-                <ul>
-                  <li>Unfinished work &amp; next steps</li>
-                  <li>Key contacts &amp; approvals</li>
-                  <li>Known problems &amp; workarounds</li>
-                  <li>Why past decisions were made</li>
-                </ul>
-                <hr />
-                <h3>Review before sharing</h3>
-                <p>
-                  Check each answer against the handover guide. Remove anything
-                  unclear or outdated.
-                </p>
+              <section className="dash-card cq-card cq-sidebar">
+                <h2>Quiz summary</h2>
                 <div className="cq-summary">
                   <span>Selected documents <b>{sources.length}</b></span>
                   <span>Questions added <b>{questions.length}</b></span>
@@ -549,15 +522,12 @@ export default function CreateQuiz() {
                 <button type="button" onClick={restoreDraft}>
                   Restore saved draft
                 </button>
+                <p className="cq-private">Drafts stay in this browser. Download the quiz to share it.</p>
               </section>
-              <p className="cq-private">
-                Drafts stay in this browser. Download a copy to share with your
-                team.
-              </p>
             </aside>
-          </main>
+          </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }
