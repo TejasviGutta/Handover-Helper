@@ -62,7 +62,18 @@ successor, and admins can read records. Viewers with access can only read.
 | `GET /guide` | Get guide content, status, revision, and latest review metadata. |
 | `PUT /guide` | The outgoing owner or an admin saves `content`. Send revision `0` to create the draft or the current revision to edit a draft or a guide with requested changes. |
 | `POST /guide/submit` | The outgoing owner or an admin sends the current `revision` to start a review. |
-| `POST /guide/review` | The successor or an admin sends the current `revision`, an `outcome` of `approved` or `changes_requested`, and a `comment` (required for changes). The submitter cannot review their own submission. |
+| `POST /guide/review` | The successor or an admin can request changes with a comment. The departing employee approves the final guide, including a draft they submitted themselves. Send the current `revision` and the `outcome`. |
 
 Use the returned revision for the next mutation. A stale revision or an
 invalid transition returns HTTP 409. An approved guide is read-only.
+
+Apply `BackEnd/supabase/migrations/202611160002_allow_departing_guide_signoff.sql`
+after the initial workflow migration, before deploying departing-employee
+approval. It updates the guide review constraint so the departing employee can
+sign off on a guide they submitted.
+
+For local development, run FastAPI on port 8000 and Vite on port 5173. Vite
+forwards frontend API requests to FastAPI. In a deployed frontend, set
+`VITE_API_URL` to the backend's HTTPS origin before building. Set
+`FRONTEND_ORIGIN` on the deployed backend to the frontend's HTTPS origin.
+Keep the Supabase service-role key in the backend's private environment.

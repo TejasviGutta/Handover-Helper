@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient.js";
 import { useRole } from "../lib/useRole.js";
 import { ROLES, ADMIN_ROLES } from "../lib/roles.js";
@@ -239,7 +239,7 @@ export default function Admin() {
                 {rows.map((p) => (
                   <section key={p.id} className="dash-card">
                     <div className="card-head">
-                      <h2>{p.project_name || "Untitled project"}</h2>
+                      <h2><Link className="admin-handover-link" to={`/handovers/${p.id}`}>{p.project_name || "Untitled project"}</Link></h2>
                       <span className={`pill ${statusClass(p.status)}`}>
                         {(p.status || "no status").replace(/[_-]+/g, " ")}
                       </span>
