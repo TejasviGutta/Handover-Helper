@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient.js";
+import { handoverApi } from "../lib/handoverApi.js";
+import {
+  ApiUnavailableError,
+  createQuiz,
+  generateQuiz,
+  getQuiz,
+  listQuizzes,
+  updateQuiz,
+} from "../lib/quizApi.js";
 import "../styles/dashboard.css";
 import "../styles/admin.css";
 import "../styles/create-quiz.css";
@@ -46,6 +55,21 @@ const SAMPLE_QUESTIONS = [
 
 const DRAFT_KEY = "handover-helper-quiz-draft";
 
+const DIFFICULTY_TO_API = {
+  Foundational: "foundational",
+  Balanced: "balanced",
+  "In depth": "in_depth",
+};
+
+const DIFFICULTY_FROM_API = Object.fromEntries(
+  Object.entries(DIFFICULTY_TO_API).map(([label, value]) => [value, label]),
+);
+
+// The backend only builds questions from documents that were already redacted.
+const USABLE_DOCUMENT_STATUSES = ["redacted", "in_review", "approved"];
+
+const DEMO_SOURCE_OPTIONS = DOCUMENTS.map((file) => ({ key: file, label: file }));
+
 function createId() {
   return crypto.randomUUID();
 }
@@ -56,6 +80,32 @@ function blankQuestion() {
     prompt: "",
     options: ["", "", "", ""],
     correct: 0,
+    is_ai_generated: false,
+  };
+}
+
+// Converts an editor question into the shared API question shape.
+function toApiQuestion(question) {
+  return {
+    prompt: question.prompt,
+    options: question.options,
+    correct: question.correct,
+    explanation: question.explanation ?? null,
+    source_chunk_ids: question.source_chunk_ids ?? [],
+    is_ai_generated: question.is_ai_generated ?? false,
+  };
+}
+
+// Converts an API question into an editor question with a local id.
+function fromApiQuestion(question, isAiGenerated) {
+  return {
+    prompt: question.prompt,
+    options: [...question.options],
+    correct: question.correct,
+    explanation: question.explanation ?? null,
+    source_chunk_ids: question.source_chunk_ids ?? [],
+    is_ai_generated: isAiGenerated ?? question.is_ai_generated ?? true,
+    id: createId(),
   };
 }
 
@@ -74,6 +124,8 @@ function isValidQuestion(question) {
 
 export default function CreateQuiz() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const handoverId = searchParams.get("handover") ?? "";
   const [email, setEmail] = useState("");
   const [title, setTitle] = useState("Project handover · Knowledge check");
   const [sources, setSources] = useState(DOCUMENTS.slice(0, 2));
@@ -84,12 +136,73 @@ export default function CreateQuiz() {
   const [answers, setAnswers] = useState({});
   const [submitted, setSubmitted] = useState(false);
   const [message, setMessage] = useState("");
+  // Handovers visible to the user, or [] when they could not be loaded.
+  const [handovers, setHandovers] = useState([]);
+  // Documents loaded for a handover. documents is null when using demo files.
+  const [loadedDocs, setLoadedDocs] = useState({ handoverId: "", documents: null });
+  // Quiz saved on the server for a handover, so later saves update it.
+  const [savedQuiz, setSavedQuiz] = useState({ handoverId: "", id: null });
+  // Which server action is running: "generate", "save", "restore" or null.
+  const [busy, setBusy] = useState(null);
+
+  // Values tied to an older handover selection are ignored.
+  const documents = loadedDocs.handoverId === handoverId ? loadedDocs.documents : null;
+  const documentsLoading = Boolean(handoverId) && loadedDocs.handoverId !== handoverId;
+  const quizId = savedQuiz.handoverId === handoverId ? savedQuiz.id : null;
+  const setQuizId = (id) => setSavedQuiz({ handoverId, id });
+
+  const backendMode = Boolean(handoverId) && documents !== null;
+  const sourceOptions = backendMode
+    ? documents.map((doc) => ({ key: doc.id, label: doc.original_name || "Untitled document" }))
+    : DEMO_SOURCE_OPTIONS;
 
   useEffect(() => {
     supabase.auth
       .getUser()
       .then(({ data }) => setEmail(data.user?.email ?? ""));
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    handoverApi("/handovers", { signal: controller.signal })
+      .then((rows) => {
+        if (!controller.signal.aborted) setHandovers(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        // Without a handover list the page keeps working with demo files.
+        if (!controller.signal.aborted) setHandovers([]);
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!handoverId) return undefined;
+    let active = true;
+
+    // Same direct read as the Admin page; row level security applies here.
+    supabase
+      .from("documents")
+      .select("id, original_name, status")
+      .eq("handover_id", handoverId)
+      .order("original_name")
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          setLoadedDocs({ handoverId, documents: null });
+          setSources(DOCUMENTS.slice(0, 2));
+          setMessage("Documents for this handover could not be loaded. Showing demo files instead.");
+          return;
+        }
+        const usable = (data ?? []).filter((doc) =>
+          USABLE_DOCUMENT_STATUSES.includes(doc.status),
+        );
+        setLoadedDocs({ handoverId, documents: usable });
+        setSources(usable.map((doc) => doc.id));
+      });
+    return () => {
+      active = false;
+    };
+  }, [handoverId]);
 
   const quizIsValid = useMemo(
     () =>
@@ -124,6 +237,18 @@ export default function CreateQuiz() {
     );
   }
 
+  function selectHandover(nextId) {
+    setSearchParams(nextId ? { handover: nextId } : {}, { replace: true });
+    setSources(nextId ? [] : DOCUMENTS.slice(0, 2));
+    setMessage("");
+  }
+
+  // Picks the message for a failed server call in handover mode.
+  function serverErrorMessage(error, { unreachable, fallback }) {
+    if (error instanceof ApiUnavailableError) return unreachable;
+    return error?.detail ?? fallback;
+  }
+
   function loadSampleQuestions() {
     setQuestions(
       Array.from({ length: questionCount }, (_, index) => {
@@ -131,6 +256,7 @@ export default function CreateQuiz() {
         return {
           ...sample,
           options: [...sample.options],
+          is_ai_generated: false,
           id: createId(),
         };
       }),
@@ -140,7 +266,42 @@ export default function CreateQuiz() {
     );
   }
 
-  function saveDraft() {
+  async function loadQuestions() {
+    if (!backendMode) {
+      loadSampleQuestions();
+      return;
+    }
+
+    setBusy("generate");
+    setMessage("Generating questions from the selected documents…");
+    try {
+      const result = await generateQuiz({
+        handoverId,
+        documentIds: sources,
+        numQuestions: questionCount,
+        difficulty: DIFFICULTY_TO_API[difficulty],
+      });
+      setQuestions(result.questions.map((question) => fromApiQuestion(question, true)));
+      setMessage(
+        result.generated < result.requested
+          ? `${result.generated} of ${result.requested} questions were generated. Add the rest yourself or try again.`
+          : `${result.generated} questions generated. Review them before sharing.`,
+      );
+    } catch (error) {
+      // Keep the current questions; never swap in sample questions here.
+      setMessage(
+        serverErrorMessage(error, {
+          unreachable:
+            "The quiz service is not reachable. Make sure the backend is running and try again.",
+          fallback: "Could not generate questions. Please try again.",
+        }),
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function saveLocalDraft() {
     try {
       localStorage.setItem(
         DRAFT_KEY,
@@ -158,7 +319,86 @@ export default function CreateQuiz() {
     }
   }
 
-  function restoreDraft() {
+  async function saveDraft() {
+    if (!backendMode) {
+      saveLocalDraft();
+      return;
+    }
+
+    const payload = {
+      title,
+      status: "draft",
+      difficulty: DIFFICULTY_TO_API[difficulty],
+      document_ids: sources,
+      questions: questions.map(toApiQuestion),
+    };
+
+    setBusy("save");
+    setMessage("Saving draft…");
+    try {
+      const saved = quizId
+        ? await updateQuiz(quizId, payload)
+        : await createQuiz({ ...payload, handover_id: handoverId });
+      setQuizId(saved.id);
+      setMessage("Draft saved to your account.");
+    } catch (error) {
+      // No localStorage fallback here: the user must know the account save failed.
+      if (error?.status === 404 && quizId) {
+        setQuizId(null);
+        setMessage("The saved draft no longer exists. Save again to create a new one.");
+      } else {
+        setMessage(
+          serverErrorMessage(error, {
+            unreachable:
+              "The quiz service is not reachable, so the draft was not saved to your account. Make sure the backend is running and try again.",
+            fallback: "The draft could not be saved. Please try again.",
+          }),
+        );
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function restoreDraft() {
+    if (!backendMode) {
+      restoreLocalDraft();
+      return;
+    }
+
+    setBusy("restore");
+    setMessage("Looking for your latest draft…");
+    try {
+      const quizzes = await listQuizzes(handoverId);
+      const latest = quizzes.find((quiz) => quiz.status === "draft");
+      if (!latest) {
+        setMessage("No saved draft was found for this handover.");
+        return;
+      }
+
+      const quiz = await getQuiz(latest.id);
+      const knownIds = new Set(documents.map((doc) => doc.id));
+      setTitle(quiz.title);
+      setDifficulty(DIFFICULTY_FROM_API[quiz.difficulty] ?? "Balanced");
+      setSources(quiz.document_ids.filter((id) => knownIds.has(id)));
+      setQuestions(quiz.questions.map((question) => fromApiQuestion(question)));
+      setQuizId(quiz.id);
+      setMessage("Saved draft restored.");
+    } catch (error) {
+      // No localStorage fallback here; keep the current editor content.
+      setMessage(
+        serverErrorMessage(error, {
+          unreachable:
+            "The quiz service is not reachable, so the saved draft could not be loaded. Make sure the backend is running and try again.",
+          fallback: "The saved draft could not be loaded. Please try again.",
+        }),
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function restoreLocalDraft() {
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
       if (!raw) {
@@ -176,9 +416,10 @@ export default function CreateQuiz() {
       }
 
       setTitle(draft.title);
+      const knownSources = new Set(sourceOptions.map((option) => option.key));
       setSources(
         Array.isArray(draft.sources)
-          ? draft.sources.filter((source) => DOCUMENTS.includes(source))
+          ? draft.sources.filter((source) => knownSources.has(source))
           : [],
       );
       setQuestionCount(
@@ -195,7 +436,7 @@ export default function CreateQuiz() {
           id: createId(),
         })),
       );
-      setMessage("Saved draft restored.");
+      setMessage("Saved draft restored from this browser.");
     } catch {
       setMessage("The saved draft could not be restored.");
     }
@@ -339,6 +580,25 @@ export default function CreateQuiz() {
                   <h2>Quiz details</h2>
                 </div>
 
+                {handovers.length > 0 && (
+                  <>
+                    <label htmlFor="quiz-handover">Handover</label>
+                    <select
+                      id="quiz-handover"
+                      value={handoverId}
+                      disabled={Boolean(busy)}
+                      onChange={(event) => selectHandover(event.target.value)}
+                    >
+                      <option value="">Demo files (no handover)</option>
+                      {handovers.map((handover) => (
+                        <option key={handover.id} value={handover.id}>
+                          {handover.project_name}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
+
                 <label htmlFor="quiz-title">Quiz title</label>
                 <input
                   id="quiz-title"
@@ -347,15 +607,23 @@ export default function CreateQuiz() {
                 />
 
                 <fieldset className="cq-sources">
-                  <legend>Source documents <span>· demo files</span></legend>
-                  {DOCUMENTS.map((file) => (
-                    <label key={file}>
+                  <legend>
+                    Source documents{" "}
+                    <span>· {backendMode ? "ready for quizzes" : "demo files"}</span>
+                  </legend>
+                  {documentsLoading && <small>Loading documents…</small>}
+                  {backendMode && !documentsLoading && !sourceOptions.length && (
+                    <small>No redacted documents in this handover yet.</small>
+                  )}
+                  {sourceOptions.map((option) => (
+                    <label key={option.key}>
                       <input
                         type="checkbox"
-                        checked={sources.includes(file)}
-                        onChange={() => toggleSource(file)}
+                        checked={sources.includes(option.key)}
+                        disabled={Boolean(busy)}
+                        onChange={() => toggleSource(option.key)}
                       />
-                      {file}
+                      {option.label}
                     </label>
                   ))}
                 </fieldset>
@@ -391,15 +659,22 @@ export default function CreateQuiz() {
 
                 <div className="cq-generate">
                   <small>
-                    Sample questions use example content and replace your current questions.
+                    {backendMode
+                      ? "Questions are generated from the selected documents and replace your current questions."
+                      : "Sample questions use example content and replace your current questions."}
                   </small>
                   <button
                     type="button"
                     className="cq-primary"
-                    disabled={!sources.length}
-                    onClick={loadSampleQuestions}
+                    disabled={!sources.length || Boolean(busy)}
+                    aria-busy={busy === "generate"}
+                    onClick={loadQuestions}
                   >
-                    Load sample questions ↗
+                    {busy === "generate"
+                      ? "Generating…"
+                      : backendMode
+                        ? "Generate questions ↗"
+                        : "Load sample questions ↗"}
                   </button>
                 </div>
               </section>
@@ -489,7 +764,14 @@ export default function CreateQuiz() {
               </section>
 
               <footer className="dash-card cq-actions">
-                <button type="button" onClick={saveDraft}>Save draft</button>
+                <button
+                  type="button"
+                  disabled={Boolean(busy)}
+                  aria-busy={busy === "save"}
+                  onClick={saveDraft}
+                >
+                  {busy === "save" ? "Saving…" : "Save draft"}
+                </button>
                 <button type="button" disabled={!quizIsValid} onClick={downloadQuiz}>
                   Download quiz
                 </button>
@@ -519,10 +801,19 @@ export default function CreateQuiz() {
                   <span>Questions added <b>{questions.length}</b></span>
                   <span>Format <b>Multiple choice</b></span>
                 </div>
-                <button type="button" onClick={restoreDraft}>
-                  Restore saved draft
+                <button
+                  type="button"
+                  disabled={Boolean(busy)}
+                  aria-busy={busy === "restore"}
+                  onClick={restoreDraft}
+                >
+                  {busy === "restore" ? "Restoring…" : "Restore saved draft"}
                 </button>
-                <p className="cq-private">Drafts stay in this browser. Download the quiz to share it.</p>
+                <p className="cq-private">
+                  {backendMode
+                    ? "Drafts are saved to your account for this handover. Download the quiz to share it."
+                    : "Drafts stay in this browser. Download the quiz to share it."}
+                </p>
               </section>
             </aside>
           </div>

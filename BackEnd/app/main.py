@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import handover_workflow, users
+from .routers import handover_workflow, users, quizzes
 
 app = FastAPI(title="Handover Helper API")
 
@@ -17,7 +17,7 @@ app.add_middleware(
 app.include_router(users.router)
 app.include_router(handover_workflow.router)
 app.include_router(handover_workflow.directory_router)
-
+app.include_router(quizzes.router)
 
 @app.get("/health")
 def health():
