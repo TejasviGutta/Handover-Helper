@@ -126,7 +126,7 @@ def index_document_from_supabase(
     try:
         chunk_count = index_redacted_document(
             document_id=document_id,
-            filename=record["original_name"],
+            filename="Document",
             redacted_text=redacted_text,
         )
     except Exception as error:

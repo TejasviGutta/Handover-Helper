@@ -92,7 +92,7 @@ def test_authorized_redacted_document_is_indexed():
 
         index.assert_called_once_with(
             document_id=DOCUMENT_ID,
-            filename="handover.txt",
+            filename="Document",
             redacted_text=REDACTED_RECORD["redacted_text"],
         )
 

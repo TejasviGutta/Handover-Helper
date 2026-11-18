@@ -101,6 +101,17 @@ def index_redacted_document(
     return len(ids)
 
 
+def is_document_indexed(document_id: str) -> bool:
+    """Check readiness in the isolated redacted collection."""
+    document_id = _validate_document_id(document_id)
+    result = collection.get(
+        where={"document_id": document_id},
+        limit=1,
+        include=[],
+    )
+    return bool(result["ids"])
+
+
 def search_redacted_document(
     question: str,
     document_id: str,

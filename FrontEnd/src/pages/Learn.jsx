@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient.js";
 import useLearnSession from "../components/learn/useLearnSession.js";
-import { MOCK_DOCUMENTS, SUGGESTIONS, getMockLearnResponse } from "../components/learn/mockLearn.js";
+import { SUGGESTIONS } from "../components/learn/mockLearn.js";
+import { fetchLearnDocuments, askLearnQuestion, retryLearnIndex } from "../components/learn/learnApi.js";
 import Sources from "../components/learn/Sources.jsx";
 import "./Learn.css";
 
@@ -29,7 +30,7 @@ function SendIcon() {
 }
 
 // Exported separately so empty-document and communication failures can be tested without auth or real data.
-export function LearnWorkspace({ user, documents = MOCK_DOCUMENTS, respond = getMockLearnResponse }) {
+export function LearnWorkspace({ user, documents = [], respond = askLearnQuestion, loadingDocuments = false, loadingError = "", reloadDocuments, retryIndex, retryingId }) {
   const navigate = useNavigate();
   const { state: arrival } = useLocation();
   const [query, setQuery] = useState("");
@@ -45,10 +46,18 @@ export function LearnWorkspace({ user, documents = MOCK_DOCUMENTS, respond = get
   const bottom = useRef(null);
   const composer = useRef(null);
   const document = documents.find((item) => item.id === selectedId);
+  const ready = document?.indexing_status === "indexed";
   const messages = conversations[selectedId] ?? [];
   const filtered = documents.filter((item) => item.filename.toLowerCase().includes(query.toLowerCase()));
 
   useEffect(() => () => request.current?.abort(), []);
+  useEffect(() => {
+    setSelectedId((current) => {
+      if (arrival?.documentId && documents.some((item) => item.id === arrival.documentId)) return arrival.documentId;
+      if (documents.some((item) => item.id === current)) return current;
+      return documents[0]?.id ?? null;
+    });
+  }, [documents, arrival?.documentId]);
   useEffect(() => { bottom.current?.scrollIntoView({ block: "nearest" }); }, [messages.length, pending, selectedId]);
 
   function selectDocument(id) {
@@ -64,7 +73,7 @@ export function LearnWorkspace({ user, documents = MOCK_DOCUMENTS, respond = get
   async function submit(event) {
     event?.preventDefault();
     const question = draft.trim();
-    if (!document || !question || question.length > 2000 || request.current) return;
+    if (!ready || !question || question.length > 2000 || request.current) return;
     const documentId = document.id;
     const controller = new AbortController();
     request.current = controller;
@@ -79,9 +88,9 @@ export function LearnWorkspace({ user, documents = MOCK_DOCUMENTS, respond = get
       setConversations((current) => ({ ...current, [documentId]: [...(current[documentId] ?? []), {
         id: crypto.randomUUID(), role: "assistant", text: result.answer, sources: result.sources ?? [],
       }] }));
-    } catch {
+    } catch (failure) {
       if (!controller.signal.aborted && request.current === controller) {
-        setError("Your question could not be submitted. Your question has been restored; please try again.");
+        setError(failure instanceof Error ? failure.message : "Question failed. Please try again.");
         setDraft(question);
       }
     } finally {
@@ -114,7 +123,7 @@ export function LearnWorkspace({ user, documents = MOCK_DOCUMENTS, respond = get
       <main className="learn-main">
         <div className="learn-title-row"><div><h1>Learn</h1><p>Understand your handover documents with AI.</p></div></div>
         {typeof arrival?.documentId === "string" && typeof arrival?.filename === "string" && (
-          <p className="learn-arrival-notice" role="status">You arrived from Gather with {arrival.filename}. Live document loading is not connected yet. The documents and responses below are development samples; your uploaded document has not been added to this list.</p>
+          <p className="learn-arrival-notice" role="status">You arrived from Gather with {arrival.filename}. Your uploaded document will appear below if you have access. Select it to ask questions when indexing is ready.</p>
         )}
         <ol className="learn-steps" aria-label="Handover steps">
           <li><Link to="/upload"><span className="learn-step-number">1</span><span>Gather</span></Link></li>
@@ -126,13 +135,15 @@ export function LearnWorkspace({ user, documents = MOCK_DOCUMENTS, respond = get
             <button className="learn-mobile-documents" aria-expanded={documentsOpen} aria-controls="learn-document-panel" onClick={() => setDocumentsOpen(!documentsOpen)}>Your Documents ({documents.length}) <span>{documentsOpen ? "Hide" : "Choose"}</span></button>
             <div className="learn-document-panel" id="learn-document-panel">
               <div className="learn-sidebar-heading"><h2>Your Documents</h2><span>{filtered.length}</span></div>
-              <p className="learn-sample-note">Fictional development samples</p>
+              <p className="learn-sample-note">Your uploaded documents</p>
               <label className="learn-sr-only" htmlFor="learn-search">Search documents</label>
               <input id="learn-search" type="search" placeholder="Search documents..." value={query} onChange={(event) => setQuery(event.target.value)} />
+              {loadingDocuments && <p className="learn-sample-note" role="status">Loading your documents...</p>}
+              {loadingError && <div className="learn-error" role="alert">{loadingError} <button type="button" onClick={reloadDocuments}>Retry loading</button></div>}
               <div className="learn-document-list">
                 {!documents.length ? <div className="learn-empty-documents"><h3>No documents available.</h3><p>Upload documents to start learning about your handover.</p><Link to="/upload">Go to Upload</Link></div> : !filtered.length ? <p className="learn-no-results">No matching documents. Try another filename.</p> : filtered.map((item) => (
                   <button className={`learn-document${selectedId === item.id ? " is-selected" : ""}`} key={item.id} aria-pressed={selectedId === item.id} onClick={() => selectDocument(item.id)}>
-                    <FileIcon type={item.type} /><span><strong>{item.filename}</strong><small>{item.type} document</small></span>
+                    <FileIcon type={item.type} /><span><strong>{item.filename}</strong><small>{item.indexing_status === "indexed" ? `${item.type} · Ready` : `${item.type} · Not indexed`}</small></span>
                   </button>
                 ))}
               </div>
@@ -140,20 +151,29 @@ export function LearnWorkspace({ user, documents = MOCK_DOCUMENTS, respond = get
             </div>
           </aside>
           <section className="learn-chat" aria-label="Handover Assistant">
-            <header className="learn-chat-header"><h2>Handover Assistant</h2><p>{document ? <><FileIcon type={document.type} /><span>Currently learning from: <strong>{document.filename}</strong></span></> : "Select a document to begin."}</p></header>
+            <header className="learn-chat-header">
+              <h2>Handover Assistant</h2>
+              <p>{document ? <><FileIcon type={document.type} /><span>Currently learning from: <strong>{document.filename}</strong></span></> : "Select a document to begin."}</p>
+              {document && !ready && <div className="learn-index-warning">
+                <span>This document is saved but not indexed for AI yet.</span>
+                <button type="button" onClick={() => retryIndex(document.id)} disabled={retryingId === document.id}>
+                  {retryingId === document.id ? "Indexing..." : "Retry indexing"}
+                </button>
+              </div>}
+            </header>
             <div className="learn-messages" role="log" aria-label="Conversation" aria-live="polite" aria-busy={pending}>
-              {!messages.length && <div className="learn-welcome"><span className="learn-welcome-symbol" aria-hidden="true"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15" /></svg></span><h3>What would you like to learn?</h3><p>Select a document and ask questions to understand its content, responsibilities, and next steps.</p><div className="learn-suggestions">{SUGGESTIONS.map(([label, prompt]) => <button key={label} disabled={!document || pending} onClick={() => { setDraft(prompt); composer.current?.focus(); }}>{label}<span aria-hidden="true">&#8594;</span></button>)}</div><small>Suggestions fill the input. Review your question, then send.</small></div>}
-              {messages.map((message) => <article key={message.id} className={`learn-message learn-message-${message.role}`}><span className="learn-message-label">{message.role === "user" ? "You" : "Assistant - Demo response"}</span><div className="learn-message-body"><AnswerText text={message.text} /></div>{message.role === "assistant" && <Sources sources={message.sources} />}</article>)}
-              {pending && <div className="learn-pending" role="status"><span /> Preparing a demonstration response...</div>}
+              {!messages.length && <div className="learn-welcome"><span className="learn-welcome-symbol" aria-hidden="true"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15" /></svg></span><h3>What would you like to learn?</h3><p>Select a document and ask questions to understand its content, responsibilities, and next steps.</p><div className="learn-suggestions">{SUGGESTIONS.map(([label, prompt]) => <button key={label} disabled={!ready || pending} onClick={() => { setDraft(prompt); composer.current?.focus(); }}>{label}<span aria-hidden="true">&#8594;</span></button>)}</div><small>Suggestions fill the input. Review your question, then send.</small></div>}
+              {messages.map((message) => <article key={message.id} className={`learn-message learn-message-${message.role}`}><span className="learn-message-label">{message.role === "user" ? "You" : "Assistant"}</span><div className="learn-message-body"><AnswerText text={message.text} /></div>{message.role === "assistant" && <Sources sources={message.sources} />}</article>)}
+              {pending && <div className="learn-pending" role="status"><span /> Searching redacted content and asking Qwen3...</div>}
               <div ref={bottom} />
             </div>
             <form className="learn-composer" onSubmit={submit}>
               {error && <p className="learn-error" role="alert">{error}</p>}
               <label className="learn-sr-only" htmlFor="learn-question">Question about the selected document</label>
-              <div className="learn-composer-controls"><textarea ref={composer} id="learn-question" rows="2" maxLength={2000} placeholder="Ask a question about this document..." value={draft} disabled={!document || pending} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => {
+              <div className="learn-composer-controls"><textarea ref={composer} id="learn-question" rows="2" maxLength={2000} placeholder="Ask a question about this document..." value={draft} disabled={!ready || pending} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); submit(); }
-              }} /><button type="submit" disabled={!document || !draft.trim() || pending}><SendIcon />Send</button></div>
-              <div className="learn-composer-note"><span>Frontend prototype: sample documents only. Live AI is not connected.</span><span>{draft.length}/2000 | Shift + Enter for a new line</span></div>
+              }} /><button type="submit" disabled={!ready || !draft.trim() || pending}><SendIcon />Send</button></div>
+              <div className="learn-composer-note"><span>Answers use redacted document text. Verify important details.</span><span>{draft.length}/2000 | Shift + Enter for a new line</span></div>
             </form>
           </section>
         </div>
@@ -164,8 +184,56 @@ export function LearnWorkspace({ user, documents = MOCK_DOCUMENTS, respond = get
 
 export default function Learn() {
   const session = useLearnSession();
+  const [documents, setDocuments] = useState([]);
+  const [loadingDocuments, setLoadingDocuments] = useState(true);
+  const [loadingError, setLoadingError] = useState("");
+  const [revision, setRevision] = useState(0);
+  const [retryingId, setRetryingId] = useState(null);
+
+  useEffect(() => {
+    if (!session.user) return;
+    const controller = new AbortController();
+    let active = true;
+    setLoadingDocuments(true);
+    setLoadingError("");
+    fetchLearnDocuments({ signal: controller.signal }).then((items) => {
+      if (active) setDocuments(items);
+    }).catch((failure) => {
+      if (active && !controller.signal.aborted) {
+        setLoadingError(failure instanceof Error ? failure.message : "Unable to load documents.");
+      }
+    }).finally(() => {
+      if (active) setLoadingDocuments(false);
+    });
+    return () => { active = false; controller.abort(); };
+  }, [session.user?.id, revision]);
+
+  async function retryIndex(documentId) {
+    setRetryingId(documentId);
+    setLoadingError("");
+    try {
+      await retryLearnIndex(documentId);
+      setRevision((current) => current + 1);
+    } catch (failure) {
+      setLoadingError(failure instanceof Error ? failure.message : "Indexing failed.");
+    } finally {
+      setRetryingId(null);
+    }
+  }
+
   if (session.checking) return <div className="learn-page learn-session" role="status">Checking your session...</div>;
   if (session.error) return <div className="learn-page learn-session"><p role="alert">Unable to check your session.</p><Link to="/login">Go to Login</Link></div>;
   if (!session.user) return <Navigate to="/login" replace />;
-  return <LearnWorkspace user={session.user} />;
+  return (
+    <LearnWorkspace
+      user={session.user}
+      documents={documents}
+      respond={askLearnQuestion}
+      loadingDocuments={loadingDocuments}
+      loadingError={loadingError}
+      reloadDocuments={() => setRevision((value) => value + 1)}
+      retryIndex={retryIndex}
+      retryingId={retryingId}
+    />
+  );
 }

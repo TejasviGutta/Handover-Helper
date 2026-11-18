@@ -58,6 +58,7 @@ from app.auth import get_current_user
 
 # Our new PII-redacted ChromaDB indexing implementation.
 from app.ai.redacted_vector import index_redacted_document
+from app.routers import learn
 
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ app.add_middleware(
 app.include_router(users.router)
 app.include_router(handover_workflow.router)
 app.include_router(handover_workflow.directory_router)
+app.include_router(learn.router)
 
 
 # ---------------------------------------------------------
