@@ -26,13 +26,6 @@ import "./upload.css";
 // set VITE_API_URL to the real server address and this picks it up.
 const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
-// Fake project list for the dropdown. Step 11 replaces this with real projects.
-// Each project has an id (for the computer) and a name (for people).
-const projects = [
-  { id: "proj-1", name: "Client portal redesign" },
-  { id: "proj-2", name: "Billing system migration" },
-  { id: "proj-3", name: "Data warehouse rollout" },
-];
 
 // The size limit, 20 MB, written in bytes (20 x 1024 x 1024).
 // Change the 20 here if the team agrees on a different limit.
@@ -252,9 +245,17 @@ export default function UploadPage() {
   // Memory slot for the signed-in user's email, shown in the top bar.
   const [email, setEmail] = useState("");
 
-  // Memory slot for the chosen project. Starts empty ("") since nothing is picked yet.
-  // projectId is the current value. setProjectId is how we change it.
+  // Memory slot for the chosen handover. Starts empty ("") since nothing is picked yet.
+  // projectId is the chosen handover's id. setProjectId is how we change it.
   const [projectId, setProjectId] = useState("");
+
+  // Memory slots for the real handover list from the backend.
+  // handovers: the ones this person can upload to.
+  // handoversLoading: true until the list arrives.
+  // handoversError: a message if the list couldn't be loaded.
+  const [handovers, setHandovers] = useState([]);
+  const [handoversLoading, setHandoversLoading] = useState(true);
+  const [handoversError, setHandoversError] = useState("");
 
   // Memory slot for the file list. Starts as an empty list.
   const [files, setFiles] = useState([]);
@@ -273,6 +274,33 @@ export default function UploadPage() {
   // Same as the Dashboard does.
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? ""));
+  }, []);
+
+  // When the page opens, load the handovers this person can upload files to.
+  // The backend only sends handovers they're on. "can_edit" is true for the
+  // departing employee and admins, the people who upload files.
+  useEffect(() => {
+    async function loadHandovers() {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        if (!token) {
+          setHandoversError("Please sign in to see your handovers.");
+          return;
+        }
+        const response = await fetch(`${API_URL}/handovers`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) throw new Error(`Status ${response.status}`);
+        const list = await response.json();
+        setHandovers(list.filter((handover) => handover.can_edit));
+      } catch {
+        setHandoversError("Couldn't load your handovers. Refresh the page to try again.");
+      } finally {
+        setHandoversLoading(false);
+      }
+    }
+    loadHandovers();
   }, []);
 
   // Signs the user out and goes back to the landing page. Same as the Dashboard.
@@ -326,6 +354,8 @@ export default function UploadPage() {
     // Pack the file the way the backend expects it.
     const formData = new FormData();
     formData.append("file", item.file);
+    // Which handover this file belongs to. The backend checks you're allowed to add to it.
+    formData.append("handover_id", projectId);
 
     // XMLHttpRequest is an older way to send data, but unlike fetch,
     // it reports upload progress, which drives the progress bar.
@@ -445,10 +475,14 @@ export default function UploadPage() {
   // getRootProps: settings for the drop box.
   // getInputProps: settings for the hidden file browser.
   // isDragActive: true while a file is being dragged over the box.
+  // The drop box stays locked until a handover is picked, so every file has one.
+  const noHandoverPicked = projectId === "";
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: ACCEPTED_TYPES,
     maxSize: MAX_FILE_SIZE,
+    disabled: noHandoverPicked,
   });
 
   // Everything below is the layout: what the user sees.
@@ -512,34 +546,54 @@ export default function UploadPage() {
                 Project
               </label>
               {/* The dropdown. It shows whatever is in projectId,
-                  and updates projectId when the user picks something. */}
+                  and updates projectId when the user picks something.
+                  It locks once files are added, so a batch can't end up
+                  split across two handovers. */}
               <select
                 id="project"
                 value={projectId}
                 onChange={(e) => setProjectId(e.target.value)}
-                className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-brand-purple focus:outline-none focus:ring-2 focus:ring-brand-purple/30"
+                disabled={handoversLoading || files.length > 0}
+                className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-brand-purple focus:outline-none focus:ring-2 focus:ring-brand-purple/30 disabled:cursor-not-allowed disabled:bg-gray-100"
               >
                 {/* Placeholder option. "disabled" means it can't be picked again. */}
                 <option value="" disabled>
-                  Select a project
+                  {handoversLoading ? "Loading your handovers..." : "Select a project"}
                 </option>
-                {/* Make one option for each project in the fake list. */}
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
+                {/* One option for each handover this person can upload to. */}
+                {handovers.map((handover) => (
+                  <option key={handover.id} value={handover.id}>
+                    {handover.project_name}
                   </option>
                 ))}
               </select>
+
+              {/* Messages under the dropdown, only when they apply. */}
+              {handoversError && (
+                <p className="mt-2 text-sm text-red-600">{handoversError}</p>
+              )}
+              {!handoversLoading && !handoversError && handovers.length === 0 && (
+                <p className="mt-2 text-sm text-gray-500">
+                  You aren&apos;t the departing employee on any handover yet. Ask an admin to add you to one.
+                </p>
+              )}
+              {files.length > 0 && (
+                <p className="mt-2 text-sm text-gray-500">
+                  Files are going to this project. Reload the page to switch projects.
+                </p>
+              )}
             </div>
 
             {/* The drag-and-drop box. getRootProps makes it accept drops and clicks.
                 The styling switches to purple while a file is being dragged over it. */}
             <div
               {...getRootProps()}
-              className={`mt-6 cursor-pointer rounded-xl border-2 border-dashed px-6 py-10 text-center transition ${
-                isDragActive
-                  ? "border-brand-purple bg-brand-purple-50"
-                  : "border-gray-300 bg-gray-50 hover:border-brand-purple/60"
+              className={`mt-6 rounded-xl border-2 border-dashed px-6 py-10 text-center transition ${
+                noHandoverPicked
+                  ? "cursor-not-allowed border-gray-200 bg-gray-50 opacity-60"
+                  : isDragActive
+                  ? "cursor-pointer border-brand-purple bg-brand-purple-50"
+                  : "cursor-pointer border-gray-300 bg-gray-50 hover:border-brand-purple/60"
               }`}
             >
               {/* Hidden file browser. Opens when the box is clicked. */}
@@ -550,7 +604,9 @@ export default function UploadPage() {
               </div>
               {/* Main message. Changes while a file is being dragged over. */}
               <p className="mt-4 font-medium text-gray-900">
-                {isDragActive
+                {noHandoverPicked
+                  ? "Pick a project above to start adding files."
+                  : isDragActive
                   ? "Drop your files here"
                   : "Hand off your work. Drop files here or click to browse."}
               </p>

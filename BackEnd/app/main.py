@@ -12,7 +12,8 @@ import uuid
 # HTTPException lets us send back an error with a message.
 # Depends runs a check (like the login check) before the address does its work.
 # Request gives us details about the incoming request, like where it came from.
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+# Form lets an upload carry extra fields next to the file, like which handover it's for.
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 
 # CORS is a browser safety rule. It blocks web pages from calling a server
 # unless that server says "this page is allowed." We allow only our frontend.
@@ -33,6 +34,9 @@ from app.files.redact import redact_text
 
 # Our Supabase saving code, from app/files/storage.py.
 from app.files.storage import save_file
+
+# Who can add files to which handover, from app/files/handovers.py.
+from app.files.handovers import can_upload_to, get_handover
 
 # Short-lived download links, from app/files/downloads.py.
 from app.files.downloads import (
@@ -123,18 +127,38 @@ async def preview_file(file: UploadFile = File(...)):
     }
 
 
-# Receives one file, checks it, reads its text, hides personal info,
-# and saves it to Supabase. Only signed-in users can upload.
+# Receives one file for one handover, checks it, reads its text, hides
+# personal info, and saves it to Supabase. Only the handover's departing
+# employee (or an admin) can upload to it.
 # Every outcome, good or bad, is written to the audit log.
 @app.post("/files/upload", status_code=201)
 async def upload_file(
     request: Request,
     file: UploadFile = File(...),
+    # Which handover the file belongs to. Must look like a real ID.
+    handover_id: uuid.UUID = Form(...),
     # Runs the login check first. If it fails, the file is never read.
     user=Depends(get_current_user),
 ):
     ip = client_ip(request)
     label = clean_label(file.filename)
+
+    # Check the person can add files to this handover BEFORE reading the file.
+    # Same message whether the handover doesn't exist or they aren't on it,
+    # so nobody can use this to find out which handovers exist.
+    try:
+        handover = get_handover(handover_id)
+        allowed = handover is not None and can_upload_to(user, handover)
+    except Exception:
+        logger.exception("Looking up a handover for upload failed")
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again.")
+    if not allowed:
+        log_event(
+            "file.upload_rejected", user=user, target_type="handover", target_id=handover_id,
+            target_label=label,
+            details={"reason": "not_allowed_on_handover" if handover else "handover_not_found"}, ip=ip,
+        )
+        raise HTTPException(status_code=404, detail="Handover not found")
 
     # Same size-safe read as above.
     content = await file.read(MAX_FILE_SIZE + 1)
@@ -184,6 +208,7 @@ async def upload_file(
             content,
             details,
             uploaded_by=user.id,
+            handover_id=str(handover_id),
             status="redacted",
             redacted_text=redacted,
             redaction_summary=summary,
@@ -203,7 +228,12 @@ async def upload_file(
     log_event(
         "file.upload", user=user, target_type="document", target_id=record["id"],
         target_label=record["original_name"],
-        details={"file_type": details["extension"], "size": details["size"], "pii_hidden": summary},
+        details={
+            "handover_id": str(handover_id),
+            "file_type": details["extension"],
+            "size": details["size"],
+            "pii_hidden": summary,
+        },
         ip=ip,
     )
 

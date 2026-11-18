@@ -6,6 +6,7 @@
 # shared or leaked, it's useless by then.
 
 from app.files.storage import BUCKET, get_client
+from app.routers.handover_workflow import matches_employee
 
 # How long a download link works, in seconds.
 LINK_LIFETIME_SECONDS = 120
@@ -52,9 +53,10 @@ def get_role(user):
 def is_on_handover(user, handover_id):
     """True if the user is the departing or incoming employee on this handover.
 
-    The handovers table stores those people by email.
+    The handovers table stores those people by email. Matching uses the team's
+    matches_employee check, which only trusts verified emails.
     """
-    if not handover_id or not getattr(user, "email", None):
+    if not handover_id:
         return False
     result = (
         get_client()
@@ -67,9 +69,9 @@ def is_on_handover(user, handover_id):
     if not result.data:
         return False
     handover = result.data[0]
-    email = user.email.strip().lower()
-    people = [handover.get("departing_employee"), handover.get("incoming_employee")]
-    return any(person and person.strip().lower() == email for person in people)
+    return matches_employee(user, handover.get("departing_employee")) or matches_employee(
+        user, handover.get("incoming_employee")
+    )
 
 
 def access_reason(user, document):
