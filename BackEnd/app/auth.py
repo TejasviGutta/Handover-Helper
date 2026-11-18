@@ -1,42 +1,60 @@
-# Checks that a request comes from a signed-in user.
-#
-# When someone signs in on the frontend, Supabase gives their browser a
-# token: a long code that proves who they are. The upload page sends that
-# token with every upload. Here we ask Supabase whether the token is real
-# and still valid, and who it belongs to.
-
-from fastapi import Depends, HTTPException
+import httpx
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.files.storage import get_client
+from .config import settings
+from .schemas import CurrentUser, Role
+from .supabase_client import supabase_admin
 
-# Reads the token from the request's "Authorization: Bearer <token>" header.
-# auto_error=False lets us send our own plain-English message if it's missing.
 bearer = HTTPBearer(auto_error=False)
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
-):
-    """Returns the signed-in user, or stops the request with a 401 error.
+    creds: HTTPAuthorizationCredentials | None = Depends(bearer),
+) -> CurrentUser:
+    """Check the login token sent by the frontend and return who the user is."""
+    if creds is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not signed in")
 
-    401 means "not signed in". The request goes no further.
-    """
-    if credentials is None:
-        raise HTTPException(status_code=401, detail="Please sign in to upload files.")
+    # Ask Supabase whether this token is valid
+    resp = httpx.get(
+        f"{settings.supabase_url}/auth/v1/user",
+        headers={
+            "Authorization": f"Bearer {creds.credentials}",
+            "apikey": settings.supabase_publishable_key,
+        },
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
+    auth_user = resp.json()
 
-    # Ask Supabase who this token belongs to.
-    # A fake, changed, or expired token fails here.
-    try:
-        response = get_client().auth.get_user(credentials.credentials)
-    except Exception:
-        raise HTTPException(
-            status_code=401, detail="Your sign-in has expired. Please sign in again."
-        )
+    # Look up the user's role in the profiles table
+    rows = (
+        supabase_admin.table("profiles")
+        .select("role")
+        .eq("id", auth_user["id"])
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not rows:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "No profile for this user")
 
-    if response is None or response.user is None:
-        raise HTTPException(
-            status_code=401, detail="Your sign-in has expired. Please sign in again."
-        )
+    return CurrentUser(
+        id=auth_user["id"],
+        email=auth_user.get("email"),
+        role=rows[0]["role"],
+        email_verified=bool(auth_user.get("email_confirmed_at")),
+    )
 
-    return response.user
+
+def require_roles(*allowed: Role):
+    """Use as a dependency to restrict an endpoint to certain roles."""
+
+    def checker(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+        if user.role not in allowed:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Not allowed for your role")
+        return user
+
+    return checker

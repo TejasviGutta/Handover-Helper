@@ -111,3 +111,7 @@ openpyxl>=3.1
 
 python-multipart
 supabase
+
+pandas
+presidio-analyzer
+presidio-anonymizer
