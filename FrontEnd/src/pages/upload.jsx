@@ -1,47 +1,23 @@
-// Pull in useState, useEffect, and useRef from React.
-// useState gives the page a memory slot that can change.
-// useEffect runs code once when the page opens (used to look up who is signed in).
-// useRef holds things that don't change what's on screen (the uploads in progress).
+
 import { useEffect, useRef, useState } from "react";
-
-// Pull in page-switching tools, the same ones the Dashboard uses.
 import { useNavigate } from "react-router-dom";
-
-// Pull in the ready-made drag-and-drop tool we installed.
 import { useDropzone } from "react-dropzone";
-
-// Pull in the Supabase connection Tejasvi set up, to get the signed-in user's email
-// and to sign out.
 import { supabase } from "../lib/supabaseClient.js";
 
-// Pull in Tejasvi's styles so the top bar and background match the Dashboard.
 import "../styles/dashboard.css";
 import "../styles/admin.css";
-
-// Pull in the Tailwind classes and brand colors for this page.
 import "./upload.css";
 
-// The backend server's address.
-// On your computer it's 127.0.0.1:8000. When the site goes online,
-// set VITE_API_URL to the real server address and this picks it up.
 const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
-// Fake project list for the dropdown. Step 11 replaces this with real projects.
-// Each project has an id (for the computer) and a name (for people).
 const projects = [
   { id: "proj-1", name: "Client portal redesign" },
   { id: "proj-2", name: "Billing system migration" },
   { id: "proj-3", name: "Data warehouse rollout" },
 ];
 
-// The size limit, 20 MB, written in bytes (20 x 1024 x 1024).
-// Change the 20 here if the team agrees on a different limit.
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
-// The file types we allow.
-// Left side: the official type name browsers use.
-// Right side: the file ending that goes with it.
-// A file passes if it matches either side.
 const ACCEPTED_TYPES = {
   "application/pdf": [".pdf"],
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
@@ -50,12 +26,9 @@ const ACCEPTED_TYPES = {
   "text/plain": [".txt"],
 };
 
-// The three steps of a handover, shown in the tracker at the top.
-// currentStep is the one this page belongs to (1 = Gather).
 const STEPS = ["Gather", "Learn", "Close the gaps"];
 const currentStep = 1;
 
-// The four things the guide will pull from the files, shown in the side card.
 const PULLED_ITEMS = [
   "Unfinished work",
   "Key contacts",
@@ -63,54 +36,58 @@ const PULLED_ITEMS = [
   "Why past decisions were made",
 ];
 
-// The label and colors for each stage's status pill.
-// uploading: the file is being sent to the server.
-// uploaded: the file arrived, and the server is checking and saving it.
-// processing: not used yet. Comes with text extraction and PII redaction.
-// done: the server checked and saved the file.
-// failed: the server turned the file away, or the upload broke.
 const STATUS_STYLES = {
-  uploading: { label: "Uploading", className: "bg-gray-100 text-gray-700" },
-  uploaded: { label: "Uploaded", className: "bg-brand-purple-50 text-brand-purple" },
-  processing: { label: "Processing", className: "bg-blue-50 text-blue-700" },
-  done: { label: "Done", className: "bg-green-50 text-green-700" },
-  failed: { label: "Failed", className: "bg-red-50 text-red-700" },
+  uploading: {
+    label: "Uploading",
+    className: "bg-gray-100 text-gray-700",
+  },
+  uploaded: {
+    label: "Uploaded",
+    className: "bg-gray-100 text-gray-700",
+  },
+  processing: {
+    label: "Processing",
+    className: "bg-blue-50 text-blue-700",
+  },
+  done: {
+    label: "Ready",
+    className: "bg-green-50 text-green-700",
+  },
+  index_failed: {
+    label: "Not indexed",
+    className: "bg-amber-50 text-amber-800",
+  },
+  failed: {
+    label: "Failed",
+    className: "bg-red-50 text-red-700",
+  },
 };
 
-// Each item in the file list looks like this:
-// id: a random tag so the page can tell files apart, even two with the same name.
-// file: the actual file the user dropped in.
-// progress: how full the bar is, from 0 to 100.
-// status: which stage the file is in (one of the names in STATUS_STYLES).
-// error: why it failed, if it did.
-// documentId: the file's id in the documents table, once saved.
-
-// Turns the drag-and-drop tool's error codes into plain messages for the user.
 function rejectionMessage(rejection) {
-  // Collect the error codes for this file, like "file-invalid-type".
   const codes = rejection.errors.map((error) => error.code);
-  // Wrong type gets checked first, since that matters more than size.
-  if (codes.includes("file-invalid-type")) return "File type not supported";
-  if (codes.includes("file-too-large")) return "File is too large (20 MB max)";
-  // Backup message for anything unexpected.
+
+  if (codes.includes("file-invalid-type")) {
+    return "File type not supported";
+  }
+
+  if (codes.includes("file-too-large")) {
+    return "File is too large (20 MB max)";
+  }
+
   return "This file can't be added";
 }
 
-// Turns a raw size in bytes into something readable, like "2.4 MB".
 function formatSize(bytes) {
-  // Under 1 KB: show bytes.
   if (bytes < 1024) return `${bytes} B`;
-  // Under 1 MB: show KB, rounded to a whole number.
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  // Otherwise: show MB with one decimal place.
+  if (bytes < 1024 * 1024) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Turns a file name into a friendly type label, like "Report.pdf" into "PDF".
 function fileTypeLabel(name) {
-  // Grab the part after the last dot and make it lowercase. "Report.PDF" becomes "pdf".
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  // Lookup table: file ending on the left, label to show on the right.
+
   const labels = {
     pdf: "PDF",
     docx: "Word",
@@ -118,16 +95,10 @@ function fileTypeLabel(name) {
     csv: "CSV",
     txt: "Text",
   };
-  // Use the friendly label if we have one.
-  // If not, show the ending in capitals (like "ZIP"), or "Unknown" if there's no ending.
+
   return labels[ext] ?? (ext ? ext.toUpperCase() : "Unknown");
 }
 
-// Small drawings (icons) used around the page.
-// Each one is an SVG, which is a tiny built-in drawing.
-// aria-hidden tells screen readers to skip them, since the text next to them says it all.
-
-// A page with a folded corner. Used for file rows and the side card.
 function DocIcon({ className }) {
   return (
     <svg
@@ -146,7 +117,6 @@ function DocIcon({ className }) {
   );
 }
 
-// An arrow pointing up out of a tray. Used in the drop box.
 function UploadIcon({ className }) {
   return (
     <svg
@@ -166,7 +136,6 @@ function UploadIcon({ className }) {
   );
 }
 
-// A circle with a check mark. Used in the side card.
 function CheckIcon({ className }) {
   return (
     <svg
@@ -185,7 +154,6 @@ function CheckIcon({ className }) {
   );
 }
 
-// An arrow pointing right. Used on the Generate button.
 function ArrowIcon({ className }) {
   return (
     <svg
@@ -204,38 +172,35 @@ function ArrowIcon({ className }) {
   );
 }
 
-// The step tracker: three boxes in a row. The current step is filled purple.
 function StepTracker() {
   return (
-    // aria-label tells screen readers what this list is.
-    <ol aria-label="Handover steps" className="grid grid-cols-3 gap-2 sm:gap-3">
-      {/* Make one box for each step. */}
+    <ol
+      aria-label="Handover steps"
+      className="grid grid-cols-3 gap-2 sm:gap-3"
+    >
       {STEPS.map((label, index) => {
-        // Steps are numbered from 1, but the list counts from 0.
         const number = index + 1;
         const isCurrent = number === currentStep;
+
         return (
           <li
             key={label}
-            // aria-current marks the step the user is on, for screen readers.
             aria-current={isCurrent ? "step" : undefined}
             className={`flex items-center justify-center gap-2 rounded-lg px-2 py-2 text-xs sm:justify-start sm:px-3 sm:text-sm ${
               isCurrent
-                ? "bg-brand-purple font-medium text-white shadow-sm"
+                ? "bg-brand-red font-medium text-white shadow-sm"
                 : "bg-white text-gray-600 shadow-sm"
             }`}
           >
-            {/* Small circle with the step number. */}
             <span
               className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] ${
                 isCurrent
                   ? "bg-white/20 text-white"
-                  : "bg-brand-purple-50 text-brand-purple"
+                  : "bg-red-50 text-brand-red"
               }`}
             >
               {number}
             </span>
-            {/* Step name. */}
             <span className="truncate">{label}</span>
           </li>
         );
@@ -244,77 +209,57 @@ function StepTracker() {
   );
 }
 
-// The page itself.
 export default function UploadPage() {
-  // Lets the page switch to another page, like the Dashboard.
   const navigate = useNavigate();
 
-  // Memory slot for the signed-in user's email, shown in the top bar.
   const [email, setEmail] = useState("");
-
-  // Memory slot for the chosen project. Starts empty ("") since nothing is picked yet.
-  // projectId is the current value. setProjectId is how we change it.
   const [projectId, setProjectId] = useState("");
-
-  // Memory slot for the file list. Starts as an empty list.
   const [files, setFiles] = useState([]);
-
-  // Memory slot for blocked file messages. Starts empty.
   const [blocked, setBlocked] = useState([]);
-
-  // Memory slot for whether the Generate button has been clicked.
-  // Used to show a temporary message until step 12 connects the backend.
   const [generateClicked, setGenerateClicked] = useState(false);
 
-  // Keeps track of uploads still in progress, so Remove can cancel them.
   const uploadsRef = useRef(new Map());
 
-  // When the page opens, ask Supabase who is signed in and save their email.
-  // Same as the Dashboard does.
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? ""));
+    supabase.auth.getUser().then(({ data }) => {
+      setEmail(data.user?.email ?? "");
+    });
   }, []);
 
-  // Signs the user out and goes back to the landing page. Same as the Dashboard.
   async function handleSignOut() {
     await supabase.auth.signOut();
     navigate("/");
   }
 
-  // Count how many files have finished (status "done").
-  const doneCount = files.filter((item) => item.status === "done").length;
+  const doneCount = files.filter(
+    (item) => item.status === "done"
+  ).length;
 
-  // The button only works when a project is picked AND at least one file is done.
   const canGenerate = projectId !== "" && doneCount > 0;
 
-  // How many side card items show a check mark.
-  // PLACEHOLDER: each finished file checks off one item, just to show the idea.
-  // Once the backend reports what it really found, use that instead.
-  const checkedCount = Math.min(doneCount, PULLED_ITEMS.length);
+  // Placeholder until real guide extraction is connected.
+  const checkedCount = 0;
 
-  // The hint shown next to a gray button, telling the user what's missing.
-  // Empty when the button is ready.
   let generateHint = "";
+
   if (projectId === "") {
     generateHint = "Pick a project to continue.";
   } else if (doneCount === 0) {
-    generateHint = "Add at least one file to continue.";
+    generateHint = "Upload and index at least one file to continue.";
   }
 
-  // Changes some details of one file in the list, found by its id.
-  // Every other file stays the same.
   function updateFile(id, changes) {
     setFiles((current) =>
-      current.map((item) => (item.id === id ? { ...item, ...changes } : item))
+      current.map((item) =>
+        item.id === id ? { ...item, ...changes } : item
+      )
     );
   }
 
-  // Sends one file to the backend for real.
-  // The backend runs the security checks and saves it to Supabase.
   async function startUpload(item) {
-    // Get the signed-in user's token, which proves who they are.
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
+
     if (!token) {
       updateFile(item.id, {
         status: "failed",
@@ -323,35 +268,34 @@ export default function UploadPage() {
       return;
     }
 
-    // Pack the file the way the backend expects it.
     const formData = new FormData();
     formData.append("file", item.file);
 
-    // XMLHttpRequest is an older way to send data, but unlike fetch,
-    // it reports upload progress, which drives the progress bar.
     const xhr = new XMLHttpRequest();
     uploadsRef.current.set(item.id, xhr);
 
-    // While the file is being sent: move the bar.
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {
         updateFile(item.id, {
-          progress: Math.round((event.loaded / event.total) * 100),
+          progress: Math.round(
+            (event.loaded / event.total) * 100
+          ),
         });
       }
     };
 
-    // The whole file has arrived. The server is now checking and saving it.
     xhr.upload.onload = () => {
-      updateFile(item.id, { progress: 100, status: "uploaded" });
+      updateFile(item.id, {
+        progress: 100,
+        status: "processing",
+      });
     };
 
-    // The server answered.
     xhr.onload = () => {
       uploadsRef.current.delete(item.id);
 
-      // Read the server's reply. If it isn't readable, treat it as empty.
       let body = null;
+
       try {
         body = JSON.parse(xhr.responseText);
       } catch {
@@ -359,15 +303,23 @@ export default function UploadPage() {
       }
 
       if (xhr.status === 201) {
-        // 201 means saved. Keep the id for later steps.
+        const indexed = body?.indexing_status === "indexed";
+        const documentId = body?.document?.id;
+
         updateFile(item.id, {
           progress: 100,
-          status: "done",
-          documentId: body?.document?.id,
+          status:
+            indexed && documentId
+              ? "done"
+              : "index_failed",
+          documentId,
+          indexingStatus: body?.indexing_status,
+          error:
+            indexed && documentId
+              ? null
+              : "Document saved, but AI indexing is not ready. Learn is unavailable.",
         });
       } else {
-        // Anything else is a failure. Show the server's message if it sent one,
-        // like "File type not supported".
         updateFile(item.id, {
           status: "failed",
           error:
@@ -378,41 +330,36 @@ export default function UploadPage() {
       }
     };
 
-    // The server couldn't be reached at all (server off, no internet).
     xhr.onerror = () => {
       uploadsRef.current.delete(item.id);
+
       updateFile(item.id, {
         status: "failed",
-        error: "Couldn't reach the server. Check your connection and try again.",
+        error:
+          "Couldn't reach the server. Check your connection and try again.",
       });
     };
 
-    // Send it, with the token attached so the backend knows who's uploading.
     xhr.open("POST", `${API_URL}/files/upload`);
-    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.setRequestHeader(
+      "Authorization",
+      `Bearer ${token}`
+    );
     xhr.send(formData);
   }
 
-  // Runs whenever files are dropped in or picked from the file browser.
-  // The tool hands us two lists: files that passed the checks,
-  // and files that failed them.
   function onDrop(acceptedFiles, rejectedFiles) {
-    // Wrap each good file with a random id.
-    // Each one starts at 0% and in the Uploading stage.
     const goodItems = acceptedFiles.map((file) => ({
       id: crypto.randomUUID(),
       file,
       progress: 0,
       status: "uploading",
     }));
-    // Only good files go into the file list.
+
     setFiles((current) => [...current, ...goodItems]);
 
-    // Start the real upload for each good file.
     goodItems.forEach((item) => startUpload(item));
 
-    // Blocked files go into the message area instead.
-    // Each drop replaces the old messages, so they don't pile up.
     setBlocked(
       rejectedFiles.map((rejection) => ({
         id: crypto.randomUUID(),
@@ -422,160 +369,158 @@ export default function UploadPage() {
     );
   }
 
-  // Removes one file from the list.
-  // If it's still uploading, the upload is cancelled first.
-  // A file that already finished stays saved in Supabase for now.
   function removeFile(id) {
     const xhr = uploadsRef.current.get(id);
+
     if (xhr) {
       xhr.abort();
       uploadsRef.current.delete(id);
     }
-    setFiles((current) => current.filter((item) => item.id !== id));
+
+    setFiles((current) =>
+      current.filter((item) => item.id !== id)
+    );
   }
 
-  // Runs when the Generate button is clicked.
-  // For now it only shows a message. Step 12 makes it call the backend.
   function handleGenerate() {
     setGenerateClicked(true);
   }
 
-  // Set up the drag-and-drop tool.
-  // We pass in the allowed types and the size limit, so the tool checks them.
-  // getRootProps: settings for the drop box.
-  // getInputProps: settings for the hidden file browser.
-  // isDragActive: true while a file is being dragged over the box.
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const {
+    getRootProps,
+    getInputProps,
+    isDragActive,
+  } = useDropzone({
     onDrop,
     accept: ACCEPTED_TYPES,
     maxSize: MAX_FILE_SIZE,
   });
 
-  // Everything below is the layout: what the user sees.
-  // Class names starting with "dash-" or "admin-" are Tejasvi's styles.
-  // Everything else is Tailwind.
   return (
-    // Tejasvi's page wrapper, which gives the gradient background.
-    // "upload-page" switches on this page's own small reset from upload.css.
     <div className="dash-shell admin-shell upload-page">
-      {/* Top bar, copied from the Dashboard so every page matches.
-          Later this could move into one shared file for all pages. */}
       <header className="dash-top">
         <div className="dash-brand">
           <span className="dash-mark" aria-hidden="true" />
           Handover Helper
         </div>
+
         <nav className="admin-nav" aria-label="Main">
-          <button type="button" onClick={() => navigate("/dashboard")}>
+          <button
+            type="button"
+            onClick={() => navigate("/dashboard")}
+          >
             Dashboard
           </button>
-          <button type="button" onClick={() => navigate("/admin")}>
+
+          <button
+            type="button"
+            onClick={() => navigate("/admin")}
+          >
             Admin
           </button>
         </nav>
+
         <div className="dash-user">
           <span>{email}</span>
-          <button type="button" className="dash-btn" onClick={handleSignOut}>
+
+          <button
+            type="button"
+            className="dash-btn"
+            onClick={handleSignOut}
+          >
             Sign out
           </button>
         </div>
       </header>
 
-      {/* Main content, centered so it doesn't stretch across wide screens. */}
       <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
-        {/* Page title and subtitle in white, like the Dashboard heading. */}
         <h1 className="text-2xl font-semibold text-white sm:text-3xl">
           Gather your work
         </h1>
+
         <p className="mt-2 text-sm text-white/80 sm:text-base">
-          Upload the files your replacement will need. We&apos;ll turn them into
-          a handover guide.
+          Upload the files your replacement will need.
+          We'll turn them into a handover guide.
         </p>
 
-        {/* Step tracker: Gather, Learn, Close the gaps. */}
         <div className="mt-6">
           <StepTracker />
         </div>
 
-        {/* Two columns on wide screens: upload card on the left, side card on the right.
-            On a phone they stack, with the side card at the bottom. */}
         <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
-          {/* LEFT COLUMN: one white card holding the dropdown, drop box, and file list. */}
           <section className="rounded-xl bg-white p-5 shadow-sm sm:p-6">
-            {/* Project dropdown section. */}
             <div>
-              {/* Label above the dropdown. htmlFor links it to the dropdown below. */}
               <label
                 htmlFor="project"
                 className="block text-sm font-medium text-gray-900"
               >
                 Project
               </label>
-              {/* The dropdown. It shows whatever is in projectId,
-                  and updates projectId when the user picks something. */}
+
               <select
                 id="project"
                 value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
-                className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-brand-purple focus:outline-none focus:ring-2 focus:ring-brand-purple/30"
+                onChange={(e) =>
+                  setProjectId(e.target.value)
+                }
+                className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-brand-red focus:outline-none focus:ring-2 focus:ring-red-200"
               >
-                {/* Placeholder option. "disabled" means it can't be picked again. */}
                 <option value="" disabled>
                   Select a project
                 </option>
-                {/* Make one option for each project in the fake list. */}
+
                 {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
+                  <option
+                    key={project.id}
+                    value={project.id}
+                  >
                     {project.name}
                   </option>
                 ))}
               </select>
             </div>
 
-            {/* The drag-and-drop box. getRootProps makes it accept drops and clicks.
-                The styling switches to purple while a file is being dragged over it. */}
             <div
               {...getRootProps()}
               className={`mt-6 cursor-pointer rounded-xl border-2 border-dashed px-6 py-10 text-center transition ${
                 isDragActive
-                  ? "border-brand-purple bg-brand-purple-50"
-                  : "border-gray-300 bg-gray-50 hover:border-brand-purple/60"
+                  ? "border-brand-red bg-red-50"
+                  : "border-gray-300 bg-gray-50 hover:border-red-300"
               }`}
             >
-              {/* Hidden file browser. Opens when the box is clicked. */}
               <input {...getInputProps()} />
-              {/* Upload icon in a small purple square. */}
-              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg bg-brand-purple-50 text-brand-purple">
+
+              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg bg-red-50 text-brand-red">
                 <UploadIcon className="h-5 w-5" />
               </div>
-              {/* Main message. Changes while a file is being dragged over. */}
+
               <p className="mt-4 font-medium text-gray-900">
                 {isDragActive
                   ? "Drop your files here"
                   : "Hand off your work. Drop files here or click to browse."}
               </p>
-              {/* Smaller line listing allowed types and the size limit. */}
+
               <p className="mt-2 text-sm text-gray-500">
-                PDF, Word (.docx), Excel (.xlsx), CSV, or text (.txt). 20 MB max
-                per file.
+                PDF, Word (.docx), Excel (.xlsx), CSV,
+                or text (.txt). 20 MB max per file.
               </p>
             </div>
 
-            {/* Red message box for blocked files. Only shows if something was blocked.
-                role="alert" makes screen readers announce it right away. */}
             {blocked.length > 0 && (
               <div
                 role="alert"
                 className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3"
               >
-                {/* Heading for the message box. */}
                 <p className="text-sm font-medium text-red-800">
-                  Some files weren&apos;t added:
+                  Some files weren't added:
                 </p>
-                {/* One line per blocked file: the name, then the reason. */}
+
                 <ul className="mt-1 space-y-1">
                   {blocked.map((item) => (
-                    <li key={item.id} className="text-sm text-red-700">
+                    <li
+                      key={item.id}
+                      className="text-sm text-red-700"
+                    >
                       {item.name}: {item.message}
                     </li>
                   ))}
@@ -583,45 +528,37 @@ export default function UploadPage() {
               </div>
             )}
 
-            {/* File list. Only shows once at least one file has been added. */}
             {files.length > 0 && (
               <div className="mt-8">
-                {/* Heading with the number of files in a small purple pill. */}
                 <h2 className="flex items-center gap-2 text-sm font-medium text-gray-900">
                   Files
-                  <span className="rounded-full bg-brand-purple-50 px-2 py-0.5 text-xs text-brand-purple">
+
+                  <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-brand-red">
                     {files.length}
                   </span>
                 </h2>
-                {/* The list, with a thin line between each row. */}
+
                 <ul className="mt-3 divide-y divide-gray-200 rounded-xl border border-gray-200">
-                  {/* Make one row for each file in the list. */}
                   {files.map((item) => (
-                    // On a phone the row stacks into two lines.
-                    // On a wider screen it sits on one line:
-                    // icon and details, progress bar, status pill, Remove button.
                     <li
                       key={item.id}
                       className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:gap-4"
                     >
-                      {/* File icon and details. flex-1 lets this part take the spare space. */}
                       <div className="flex min-w-0 flex-1 items-center gap-3">
-                        {/* File icon in a small purple square. */}
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-purple-50 text-brand-purple">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-red-50 text-brand-red">
                           <DocIcon className="h-5 w-5" />
                         </div>
-                        {/* min-w-0 lets long names shrink instead of pushing things off. */}
+
                         <div className="min-w-0">
-                          {/* File name. "truncate" adds "..." if the name is too long. */}
                           <p className="truncate font-medium text-gray-900">
                             {item.file.name}
                           </p>
-                          {/* Size and type, like "2.4 MB · PDF". */}
+
                           <p className="text-sm text-gray-500">
                             {formatSize(item.file.size)} ·{" "}
                             {fileTypeLabel(item.file.name)}
                           </p>
-                          {/* If the upload failed, show why in red. */}
+
                           {item.error && (
                             <p className="mt-1 text-sm text-red-600">
                               {item.error}
@@ -630,29 +567,28 @@ export default function UploadPage() {
                         </div>
                       </div>
 
-                      {/* Progress bar, status pill, and Remove button.
-                          On a phone they share a second line. */}
                       <div className="flex items-center gap-3 sm:gap-4">
-                        {/* Progress bar with the percentage above it. */}
                         <div className="min-w-0 flex-1 sm:w-32 sm:flex-none">
-                          {/* Percentage number, lined up on the right. */}
                           <p className="text-right text-xs text-gray-500">
                             {item.progress}%
                           </p>
-                          {/* Gray track for the bar. */}
+
                           <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
-                            {/* Fill. Its width matches the progress number.
-                                Purple normally, red if the upload failed. */}
                             <div
                               className={`h-full rounded-full transition-all duration-300 ${
-                                item.status === "failed" ? "bg-red-500" : "bg-brand-purple"
+                                item.status === "failed"
+                                  ? "bg-red-500"
+                                  : item.status === "index_failed"
+                                    ? "bg-amber-500"
+                                    : "bg-brand-red"
                               }`}
-                              style={{ width: `${item.progress}%` }}
+                              style={{
+                                width: `${item.progress}%`,
+                              }}
                             />
                           </div>
                         </div>
 
-                        {/* Status pill. Label and colors come from STATUS_STYLES. */}
                         <span
                           className={`w-24 shrink-0 rounded-full px-2.5 py-1 text-center text-xs font-medium ${
                             STATUS_STYLES[item.status].className
@@ -661,7 +597,26 @@ export default function UploadPage() {
                           {STATUS_STYLES[item.status].label}
                         </span>
 
-                        {/* Remove button. Clicking it runs removeFile for this row's file. */}
+                        {item.status === "done" &&
+                          item.documentId && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                navigate("/learn", {
+                                  state: {
+                                    documentId:
+                                      item.documentId,
+                                    filename:
+                                      item.file.name,
+                                  },
+                                })
+                              }
+                              className="shrink-0 rounded-lg bg-brand-red px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-red-dark"
+                            >
+                              Open Learn
+                            </button>
+                          )}
+
                         <button
                           type="button"
                           onClick={() => removeFile(item.id)}
@@ -676,16 +631,13 @@ export default function UploadPage() {
               </div>
             )}
 
-            {/* Bottom bar with a thin line above it.
-                Hint on the left, Generate button on the right. */}
             <div className="mt-8 flex flex-col gap-3 border-t border-gray-200 pt-6 sm:flex-row sm:items-center sm:justify-end sm:gap-4">
-              {/* Hint explaining why the button is gray. Only shows when it isn't ready. */}
               {generateHint && (
-                <p className="text-sm text-gray-500">{generateHint}</p>
+                <p className="text-sm text-gray-500">
+                  {generateHint}
+                </p>
               )}
-              {/* The Generate button.
-                  disabled: can't be clicked until canGenerate is true.
-                  The colors switch between gray (disabled) and red (ready). */}
+
               <button
                 type="button"
                 onClick={handleGenerate}
@@ -701,41 +653,45 @@ export default function UploadPage() {
               </button>
             </div>
 
-            {/* Temporary message after clicking Generate.
-                Step 12 replaces this with the real call to the backend. */}
             {generateClicked && canGenerate && (
               <p className="mt-3 text-sm text-green-700 sm:text-right">
-                Got it. Your handover guide will be built from {doneCount}{" "}
-                {doneCount === 1 ? "file" : "files"}.
+                Guide generation is not connected yet.
+                Your {doneCount} indexed{" "}
+                {doneCount === 1 ? "document is" : "documents are"} ready
+                for the next processing step.
               </p>
             )}
           </section>
 
-          {/* RIGHT COLUMN: side card listing what the guide will pull from the files.
-              "self-start" keeps it from stretching to match the left card's height. */}
           <aside className="h-fit self-start rounded-xl bg-white p-5 shadow-sm">
-            {/* Card title. */}
             <h2 className="text-sm font-semibold text-gray-900">
-              What we&apos;ll pull from your files
+              What we'll pull from your files
             </h2>
-            {/* The four items. Checked ones are green, the rest are gray. */}
+
+            <p className="mt-2 text-xs text-gray-500">
+              These items will be verified when guide extraction
+              is connected.
+            </p>
+
             <ul className="mt-4 space-y-3">
               {PULLED_ITEMS.map((item, index) => {
-                // An item is checked once enough files have finished.
                 const isChecked = index < checkedCount;
+
                 return (
                   <li
                     key={item}
                     className={`flex items-center gap-3 text-sm ${
-                      isChecked ? "text-gray-900" : "text-gray-400"
+                      isChecked
+                        ? "text-gray-900"
+                        : "text-gray-500"
                     }`}
                   >
-                    {/* Green check when found, gray page icon when not yet. */}
                     {isChecked ? (
                       <CheckIcon className="h-5 w-5 shrink-0 text-green-600" />
                     ) : (
                       <DocIcon className="h-5 w-5 shrink-0 text-gray-300" />
                     )}
+
                     {item}
                   </li>
                 );

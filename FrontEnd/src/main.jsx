@@ -1,3 +1,4 @@
+
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
@@ -7,6 +8,7 @@ import Login from "./pages/login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Admin from "./pages/Admin.jsx";
 import Upload from "./pages/upload.jsx";
+import Learn from "./pages/Learn.jsx";
 import CreateQuiz from "./pages/CreateQuiz.jsx";
 import HandoverWorkflow from "./pages/HandoverWorkflow.jsx";
 import RequireAdmin from "./components/RequireAdmin.jsx";
@@ -19,10 +21,21 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<App />} />
+
         <Route path="/login" element={<Login />} />
+
         <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/handovers/:handoverId" element={<HandoverWorkflow />} />
-        <Route path="/handover-workflow" element={<Navigate to="/dashboard" replace />} />
+
+        <Route
+          path="/handovers/:handoverId"
+          element={<HandoverWorkflow />}
+        />
+
+        <Route
+          path="/handover-workflow"
+          element={<Navigate to="/dashboard" replace />}
+        />
+
         <Route
           path="/admin"
           element={
@@ -31,7 +44,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(
             </RequireAdmin>
           }
         />
+
         <Route path="/upload" element={<Upload />} />
+
+        <Route path="/learn" element={<Learn />} />
+
         <Route path="/create-quiz" element={<CreateQuiz />} />
       </Routes>
     </BrowserRouter>

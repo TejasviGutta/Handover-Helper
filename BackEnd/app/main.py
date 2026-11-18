@@ -1,40 +1,51 @@
-# The starting point of the backend server.
-# Every request from the frontend comes in here first.
 
-# logging writes error details to the terminal for us to read.
+"""
+Handover Helper - Main FastAPI application.
+
+Features:
+- Authentication
+- User and handover routes
+- File validation and upload
+- PII redaction
+- Supabase document storage
+- Secure ChromaDB indexing
+- Audit logging
+- Authorized file downloads
+"""
+
 import logging
-
-# uuid checks that a file ID looks like a real ID before we look it up.
 import uuid
 
-# FastAPI is the tool that turns Python functions into web addresses.
-# UploadFile and File let an address receive uploaded files.
-# HTTPException lets us send back an error with a message.
-# Depends runs a check (like the login check) before the address does its work.
-# Request gives us details about the incoming request, like where it came from.
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 
-# CORS is a browser safety rule. It blocks web pages from calling a server
-# unless that server says "this page is allowed." We allow only our frontend.
 from fastapi.middleware.cors import CORSMiddleware
 
-# The team's settings (from BackEnd/.env) and routes for handovers and users.
 from .config import settings
 from .routers import handover_workflow, users
 
-# Our security checks, from app/files/security.py.
-from app.files.security import MAX_FILE_SIZE, FileRejected, clean_label, validate_file
+from app.files.security import (
+    MAX_FILE_SIZE,
+    FileRejected,
+    clean_label,
+    validate_file,
+)
 
-# Our text extraction, from app/files/extract.py.
-from app.files.extract import ExtractionFailed, extract_text
+from app.files.extract import (
+    ExtractionFailed,
+    extract_text,
+)
 
-# Our personal info redaction, from app/files/redact.py.
 from app.files.redact import redact_text
 
-# Our Supabase saving code, from app/files/storage.py.
 from app.files.storage import save_file
 
-# Short-lived download links, from app/files/downloads.py.
 from app.files.downloads import (
     LINK_LIFETIME_SECONDS,
     access_reason,
@@ -42,20 +53,22 @@ from app.files.downloads import (
     get_document,
 )
 
-# The audit log, from app/audit.py.
 from app.audit import log_event
-
-# The login check, from app/auth.py (the team's version, which also looks up each person's role).
 from app.auth import get_current_user
 
-# Set up a logger for this file.
+# Our new PII-redacted ChromaDB indexing implementation.
+from app.ai.redacted_vector import index_redacted_document
+
+
 logger = logging.getLogger(__name__)
 
-# Create the server.
 app = FastAPI(title="Handover Helper API")
 
-# Allow the frontend to call this server.
-# The address comes from FRONTEND_ORIGIN in BackEnd/.env.
+
+# ---------------------------------------------------------
+# CORS
+# ---------------------------------------------------------
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin],
@@ -64,121 +77,228 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# The team's routes: user profiles and the handover workflow.
+
+# ---------------------------------------------------------
+# TEAM ROUTES
+# ---------------------------------------------------------
+
 app.include_router(users.router)
 app.include_router(handover_workflow.router)
 app.include_router(handover_workflow.directory_router)
 
 
-# The address a request came from, for the audit log.
-def client_ip(request):
+# ---------------------------------------------------------
+# HELPERS
+# ---------------------------------------------------------
+
+def client_ip(request: Request):
+    """Return the client's IP address for audit logging."""
+
     return request.client.host if request.client else None
 
 
-# A simple check that the server is running.
-# Visiting /health should show {"status": "ok"}.
+# ---------------------------------------------------------
+# HEALTH CHECK
+# ---------------------------------------------------------
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-# Receives one file and runs every security check on it.
-# Only reports the result. Nothing gets saved. Handy for testing.
+# ---------------------------------------------------------
+# FILE VALIDATION
+# ---------------------------------------------------------
+
+# Development-only endpoint.
+# Remove or protect before production deployment.
 @app.post("/files/check")
 async def check_file(file: UploadFile = File(...)):
-    # Read at most 20 MB plus 1 byte.
-    # If we get that extra byte, the file is too big, and we stop reading
-    # instead of loading a huge file into memory.
+
     content = await file.read(MAX_FILE_SIZE + 1)
 
     try:
         details = validate_file(file.filename, content)
+
     except FileRejected as error:
-        # 400 means "bad request". The message is safe to show the user.
-        raise HTTPException(status_code=400, detail=str(error))
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
 
-    return {"status": "accepted", **details}
+    return {
+        "status": "accepted",
+        **details,
+    }
 
 
-# Shows the text pulled out of a file, with personal info hidden,
-# so we can check what the AI will see.
-# Nothing gets saved. For testing only. Remove before the site goes live.
+# ---------------------------------------------------------
+# REDACTED DOCUMENT PREVIEW
+# ---------------------------------------------------------
+
+# Development-only endpoint.
+# Remove or protect before production deployment.
 @app.post("/files/preview")
 async def preview_file(file: UploadFile = File(...)):
+
     content = await file.read(MAX_FILE_SIZE + 1)
 
     try:
         details = validate_file(file.filename, content)
-        text = extract_text(content, details["extension"])
-    except (FileRejected, ExtractionFailed) as error:
-        raise HTTPException(status_code=400, detail=str(error))
 
-    redacted, summary = redact_text(text)
+        text = extract_text(
+            content,
+            details["extension"],
+        )
+
+    except (FileRejected, ExtractionFailed) as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+
+    try:
+        redacted, summary = redact_text(text)
+
+    except Exception as error:
+        logger.exception("Document preview redaction failed")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Document preview failed.",
+        ) from error
 
     return {
         "characters": len(redacted),
         "hidden": summary,
-        # Only the first 3,000 characters, so huge files don't flood the screen.
         "preview": redacted[:3000],
     }
 
 
-# Receives one file, checks it, reads its text, hides personal info,
-# and saves it to Supabase. Only signed-in users can upload.
-# Every outcome, good or bad, is written to the audit log.
+# ---------------------------------------------------------
+# FILE UPLOAD + PII REDACTION + CHROMADB INDEXING
+# ---------------------------------------------------------
+
 @app.post("/files/upload", status_code=201)
 async def upload_file(
     request: Request,
     file: UploadFile = File(...),
-    # Runs the login check first. If it fails, the file is never read.
     user=Depends(get_current_user),
 ):
+    """
+    Secure upload workflow:
+
+    1. Authenticate user.
+    2. Validate uploaded file.
+    3. Extract text.
+    4. Redact detected personal information.
+    5. Store original file privately in Supabase.
+    6. Store redacted text in documents.redacted_text.
+    7. Index ONLY redacted text in ChromaDB.
+    8. Return indexing status without document contents.
+    """
+
     ip = client_ip(request)
     label = clean_label(file.filename)
 
-    # Same size-safe read as above.
+    # -----------------------------------------------------
+    # 1. READ FILE WITH SIZE LIMIT
+    # -----------------------------------------------------
+
     content = await file.read(MAX_FILE_SIZE + 1)
 
-    # Run every security check first. Nothing is saved unless it passes.
+    # -----------------------------------------------------
+    # 2. VALIDATE FILE
+    # -----------------------------------------------------
+
     try:
-        details = validate_file(file.filename, content)
+        details = validate_file(
+            file.filename,
+            content,
+        )
+
     except FileRejected as error:
-        # Blocked files get logged. A pile of these from one person
-        # can be a sign someone is probing for weaknesses.
-        log_event(
-            "file.upload_rejected", user=user, target_type="file", target_label=label,
-            details={"reason": str(error), "size": len(content)}, ip=ip,
-        )
-        raise HTTPException(status_code=400, detail=str(error))
 
-    # Pull the text out. If there's no readable text, stop here.
+        log_event(
+            "file.upload_rejected",
+            user=user,
+            target_type="file",
+            target_label=label,
+            details={
+                "reason": str(error),
+                "size": len(content),
+            },
+            ip=ip,
+        )
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+
+    # -----------------------------------------------------
+    # 3. EXTRACT TEXT
+    # -----------------------------------------------------
+
     try:
-        text = extract_text(content, details["extension"])
-    except ExtractionFailed as error:
-        log_event(
-            "file.upload_rejected", user=user, target_type="file", target_label=label,
-            details={"reason": str(error), "size": len(content)}, ip=ip,
+        text = extract_text(
+            content,
+            details["extension"],
         )
-        raise HTTPException(status_code=400, detail=str(error))
 
-    # Hide the personal info. If this fails for any reason, stop.
-    # We never save text that wasn't redacted.
+    except ExtractionFailed as error:
+
+        log_event(
+            "file.upload_rejected",
+            user=user,
+            target_type="file",
+            target_label=label,
+            details={
+                "reason": str(error),
+                "size": len(content),
+            },
+            ip=ip,
+        )
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+
+    # -----------------------------------------------------
+    # 4. REDACT PERSONAL INFORMATION
+    # -----------------------------------------------------
+
     try:
         redacted, summary = redact_text(text)
-    except Exception:
-        logger.exception("Redaction failed")
+
+    except Exception as error:
+
+        logger.exception("PII redaction failed")
+
         log_event(
-            "file.upload_failed", user=user, target_type="file", target_label=label,
-            details={"stage": "redaction"}, ip=ip,
-        )
-        raise HTTPException(
-            status_code=500, detail="This file couldn't be processed. Please try again."
+            "file.upload_failed",
+            user=user,
+            target_type="file",
+            target_label=label,
+            details={
+                "stage": "redaction",
+            },
+            ip=ip,
         )
 
-    # The raw text isn't needed anymore. Drop it.
+        raise HTTPException(
+            status_code=500,
+            detail="This file couldn't be processed. Please try again.",
+        ) from error
+
+    # Original extracted text must never enter ChromaDB.
     del text
 
-    # Save the file and its record, stamped with who uploaded it.
+    # -----------------------------------------------------
+    # 5. SAVE DOCUMENT TO SUPABASE
+    # -----------------------------------------------------
+
     try:
         record = save_file(
             content,
@@ -188,70 +308,216 @@ async def upload_file(
             redacted_text=redacted,
             redaction_summary=summary,
         )
-    except Exception:
-        # Write the full error to the terminal for us,
-        # but send the user a plain message with no inside details.
-        # Error details can reveal how the system works, which helps attackers.
-        logger.exception("Saving upload failed")
-        log_event(
-            "file.upload_failed", user=user, target_type="file", target_label=label,
-            details={"stage": "save"}, ip=ip,
-        )
-        raise HTTPException(status_code=500, detail="Upload failed. Please try again.")
 
-    # Log the successful upload. Counts of hidden info only, never the info itself.
+    except Exception as error:
+
+        logger.exception("Saving document failed")
+
+        log_event(
+            "file.upload_failed",
+            user=user,
+            target_type="file",
+            target_label=label,
+            details={
+                "stage": "save",
+            },
+            ip=ip,
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Upload failed. Please try again.",
+        ) from error
+
+    # -----------------------------------------------------
+    # 6. AUDIT SUCCESSFUL UPLOAD
+    # -----------------------------------------------------
+
     log_event(
-        "file.upload", user=user, target_type="document", target_id=record["id"],
+        "file.upload",
+        user=user,
+        target_type="document",
+        target_id=record["id"],
         target_label=record["original_name"],
-        details={"file_type": details["extension"], "size": details["size"], "pii_hidden": summary},
+        details={
+            "file_type": details["extension"],
+            "size": details["size"],
+            "pii_hidden": summary,
+        },
         ip=ip,
     )
 
-    # Don't send the whole text back to the browser. It isn't needed there.
+    # -----------------------------------------------------
+    # 7. INDEX ONLY REDACTED TEXT IN CHROMADB
+    # -----------------------------------------------------
+
+    indexing_status = "failed"
+    chunks_indexed = 0
+
+    try:
+        # The text passed here has already been through
+        # the Presidio redaction step.
+        #
+        # DO NOT replace this with original extracted text.
+        chunks_indexed = index_redacted_document(
+            document_id=str(record["id"]),
+            filename="Document",
+            redacted_text=redacted,
+        )
+
+        indexing_status = "indexed"
+
+        log_event(
+            "file.indexed",
+            user=user,
+            target_type="document",
+            target_id=record["id"],
+            target_label=record["original_name"],
+            details={
+                "chunks_indexed": chunks_indexed,
+                "content_type": "redacted",
+            },
+            ip=ip,
+        )
+
+    except Exception:
+
+        logger.exception(
+            "ChromaDB indexing failed for document %s",
+            record["id"],
+        )
+
+        log_event(
+            "file.index_failed",
+            user=user,
+            target_type="document",
+            target_id=record["id"],
+            target_label=record["original_name"],
+            details={
+                "stage": "indexing",
+            },
+            ip=ip,
+        )
+
+    # -----------------------------------------------------
+    # 8. RETURN SAFE RESPONSE
+    # -----------------------------------------------------
+
+    # No original or redacted text should be returned.
     record.pop("redacted_text", None)
 
-    return {"status": "uploaded", "hidden": summary, "document": record}
+    return {
+        "status": "uploaded",
+        "indexing_status": indexing_status,
+        "chunks_indexed": chunks_indexed,
+        "hidden": summary,
+        "document": record,
+    }
 
 
-# Hands out a short-lived link to download one file.
-# Only signed-in users, and only for files they're allowed to see.
+# ---------------------------------------------------------
+# SECURE FILE DOWNLOADS
+# ---------------------------------------------------------
+
 @app.get("/files/{document_id}/download-link")
 def download_link(
     document_id: uuid.UUID,
     request: Request,
     user=Depends(get_current_user),
 ):
+    """
+    Generate a temporary link for an authorized user.
+
+    Unlike the AI pipeline, this endpoint allows authorized
+    users to download the original stored file.
+    """
+
     ip = client_ip(request)
+
+    # -----------------------------------------------------
+    # 1. LOOK UP DOCUMENT
+    # -----------------------------------------------------
 
     try:
         document = get_document(document_id)
-        reason = access_reason(user, document) if document else None
-    except Exception:
-        logger.exception("Looking up a file for download failed")
-        raise HTTPException(status_code=500, detail="Something went wrong. Please try again.")
 
-    # Same message whether the file doesn't exist or they aren't allowed.
-    # That way nobody can use this to find out which files exist.
-    if reason is None:
-        log_event(
-            "file.download_denied", user=user, target_type="document", target_id=document_id,
-            target_label=document["original_name"] if document else None,
-            details={"reason": "not_allowed" if document else "not_found"}, ip=ip,
+        reason = (
+            access_reason(user, document)
+            if document
+            else None
         )
-        raise HTTPException(status_code=404, detail="File not found")
+
+    except Exception as error:
+
+        logger.exception("Document lookup failed")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Something went wrong. Please try again.",
+        ) from error
+
+    # -----------------------------------------------------
+    # 2. CHECK AUTHORIZATION
+    # -----------------------------------------------------
+
+    if reason is None:
+
+        log_event(
+            "file.download_denied",
+            user=user,
+            target_type="document",
+            target_id=document_id,
+            target_label=(
+                document["original_name"]
+                if document
+                else None
+            ),
+            details={
+                "reason": (
+                    "not_allowed"
+                    if document
+                    else "not_found"
+                ),
+            },
+            ip=ip,
+        )
+
+        raise HTTPException(
+            status_code=404,
+            detail="File not found",
+        )
+
+    # -----------------------------------------------------
+    # 3. GENERATE SHORT-LIVED LINK
+    # -----------------------------------------------------
 
     try:
         url = create_download_link(document)
-    except Exception:
-        logger.exception("Creating a download link failed")
-        raise HTTPException(status_code=500, detail="Something went wrong. Please try again.")
 
-    # Log who got a link and which rule let them in.
-    # The link itself is never logged: while it works, anyone holding it can open the file.
+    except Exception as error:
+
+        logger.exception("Download link creation failed")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Something went wrong. Please try again.",
+        ) from error
+
+    # -----------------------------------------------------
+    # 4. AUDIT LINK CREATION
+    # -----------------------------------------------------
+
     log_event(
-        "file.download_link_created", user=user, target_type="document", target_id=document["id"],
+        "file.download_link_created",
+        user=user,
+        target_type="document",
+        target_id=document["id"],
         target_label=document["original_name"],
-        details={"access": reason, "expires_in_seconds": LINK_LIFETIME_SECONDS}, ip=ip,
+        details={
+            "access": reason,
+            "expires_in_seconds": LINK_LIFETIME_SECONDS,
+        },
+        ip=ip,
     )
 
     return {
