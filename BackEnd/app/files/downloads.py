@@ -79,7 +79,11 @@ def access_reason(user, document):
     """
     if document.get("uploaded_by") and str(document["uploaded_by"]) == str(user.id):
         return "uploader"
-    role = get_role(user)
+    # The login check already looked up the role. Use it if it's there,
+    # otherwise look it up. Roles can arrive as plain text or as a Role choice,
+    # so ".value" turns a Role choice into plain text like "admin".
+    role = getattr(user, "role", None) or get_role(user)
+    role = getattr(role, "value", role)
     if role in FULL_ACCESS_ROLES:
         return f"role:{role}"
     if is_on_handover(user, document.get("handover_id")):

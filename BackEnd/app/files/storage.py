@@ -35,7 +35,7 @@ def get_client():
     That's why it stays on the server and never goes to the browser.
     """
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SECRET_KEY")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
         raise RuntimeError("SUPABASE_URL or SUPABASE_SECRET_KEY is missing from BackEnd/.env")
     return create_client(url, key)

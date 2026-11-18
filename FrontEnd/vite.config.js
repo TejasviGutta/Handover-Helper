@@ -9,4 +9,12 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   // Turn on both helpers. tailwindcss() is the only new part.
   plugins: [react(), tailwindcss()],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+    },
+  },
 })

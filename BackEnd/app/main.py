@@ -18,6 +18,10 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 # unless that server says "this page is allowed." We allow only our frontend.
 from fastapi.middleware.cors import CORSMiddleware
 
+# The team's settings (from BackEnd/.env) and routes for handovers and users.
+from .config import settings
+from .routers import handover_workflow, users
+
 # Our security checks, from app/files/security.py.
 from app.files.security import MAX_FILE_SIZE, FileRejected, clean_label, validate_file
 
@@ -30,7 +34,7 @@ from app.files.redact import redact_text
 # Our Supabase saving code, from app/files/storage.py.
 from app.files.storage import save_file
 
-# NEW: Short-lived download links, from app/files/downloads.py.
+# Short-lived download links, from app/files/downloads.py.
 from app.files.downloads import (
     LINK_LIFETIME_SECONDS,
     access_reason,
@@ -38,10 +42,10 @@ from app.files.downloads import (
     get_document,
 )
 
-# NEW: The audit log, from app/audit.py.
+# The audit log, from app/audit.py.
 from app.audit import log_event
 
-# The login check, from app/auth.py.
+# The login check, from app/auth.py (the team's version, which also looks up each person's role).
 from app.auth import get_current_user
 
 # Set up a logger for this file.
@@ -51,18 +55,22 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Handover Helper API")
 
 # Allow the frontend to call this server.
-# 5173 is where Vite runs the frontend on your computer.
-# When the site goes online, its real address gets added here.
+# The address comes from FRONTEND_ORIGIN in BackEnd/.env.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[settings.frontend_origin],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# The team's routes: user profiles and the handover workflow.
+app.include_router(users.router)
+app.include_router(handover_workflow.router)
+app.include_router(handover_workflow.directory_router)
 
-# NEW: The address a request came from, for the audit log.
+
+# The address a request came from, for the audit log.
 def client_ip(request):
     return request.client.host if request.client else None
 
@@ -117,7 +125,7 @@ async def preview_file(file: UploadFile = File(...)):
 
 # Receives one file, checks it, reads its text, hides personal info,
 # and saves it to Supabase. Only signed-in users can upload.
-# NEW: every outcome, good or bad, is written to the audit log.
+# Every outcome, good or bad, is written to the audit log.
 @app.post("/files/upload", status_code=201)
 async def upload_file(
     request: Request,
@@ -135,7 +143,7 @@ async def upload_file(
     try:
         details = validate_file(file.filename, content)
     except FileRejected as error:
-        # NEW: Blocked files get logged. A pile of these from one person
+        # Blocked files get logged. A pile of these from one person
         # can be a sign someone is probing for weaknesses.
         log_event(
             "file.upload_rejected", user=user, target_type="file", target_label=label,
@@ -191,7 +199,7 @@ async def upload_file(
         )
         raise HTTPException(status_code=500, detail="Upload failed. Please try again.")
 
-    # NEW: Log the successful upload. Counts of hidden info only, never the info itself.
+    # Log the successful upload. Counts of hidden info only, never the info itself.
     log_event(
         "file.upload", user=user, target_type="document", target_id=record["id"],
         target_label=record["original_name"],
@@ -205,7 +213,7 @@ async def upload_file(
     return {"status": "uploaded", "hidden": summary, "document": record}
 
 
-# NEW: Hands out a short-lived link to download one file.
+# Hands out a short-lived link to download one file.
 # Only signed-in users, and only for files they're allowed to see.
 @app.get("/files/{document_id}/download-link")
 def download_link(
