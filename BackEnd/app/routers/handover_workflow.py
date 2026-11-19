@@ -2,19 +2,23 @@ from datetime import date, datetime, timezone
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from postgrest.exceptions import APIError
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from ..auth import get_current_user
+from ..permissions import (
+    PARTICIPANT_COLUMNS,
+    Handover,
+    User,
+    matches_employee,
+    member_roles,
+    require_write_access,
+)
 from ..schemas import CurrentUser, Role
 from ..supabase_client import supabase_admin
 
 router = APIRouter(prefix="/handovers/{handover_id}", tags=["handover workflow"])
 directory_router = APIRouter(tags=["handover workflow"])
-PARTICIPANT_COLUMNS = "id,departing_employee,incoming_employee"
-
-User = Annotated[CurrentUser, Depends(get_current_user)]
 GuideStatus = Literal["draft", "in_review", "changes_requested", "approved"]
 ReviewOutcome = Literal["changes_requested", "approved"]
 
@@ -70,16 +74,11 @@ class HandoverSummary(BaseModel):
     can_approve: bool
 
 
-def matches_employee(user: CurrentUser, employee_email: str | None) -> bool:
-    if not (user.email_verified and user.email and employee_email):
-        return False
-    return user.email.strip().lower() == employee_email.strip().lower()
-
-
 @directory_router.get("/handovers", response_model=list[HandoverSummary])
 def list_workflow_handovers(user: User):
     admin = user.role == Role.admin
     can_write = user.role != Role.viewer
+    memberships = member_roles(user.id)
     handovers = []
     page_size = 200
     offset = 0
@@ -96,11 +95,13 @@ def list_workflow_handovers(user: User):
         for row in rows:
             departing = matches_employee(user, row["departing_employee"])
             incoming = matches_employee(user, row["incoming_employee"])
-            if admin or departing or incoming:
+            member_role = memberships.get(row["id"])
+            if admin or departing or incoming or member_role:
+                read_only = member_role == "viewer" and not (admin or departing or incoming)
                 handovers.append(HandoverSummary(
                     id=row["id"],
                     project_name=row["project_name"] or "Untitled handover",
-                    can_write=can_write,
+                    can_write=can_write and not read_only,
                     can_edit=can_write and (admin or departing),
                     can_review=can_write and (admin or incoming),
                     can_approve=can_write and departing,
@@ -108,29 +109,6 @@ def list_workflow_handovers(user: User):
         if len(rows) < page_size:
             return handovers
         offset += page_size
-
-
-def handover_access(handover_id: UUID, user: User) -> dict:
-    rows = (
-        supabase_admin.table("handovers")
-        .select(PARTICIPANT_COLUMNS)
-        .eq("id", str(handover_id))
-        .limit(1)
-        .execute()
-        .data
-    )
-    if rows:
-        handover = rows[0]
-        if (
-            user.role == Role.admin
-            or matches_employee(user, handover["departing_employee"])
-            or matches_employee(user, handover["incoming_employee"])
-        ):
-            return handover
-    raise HTTPException(404, "Handover not found")
-
-
-Handover = Annotated[dict, Depends(handover_access)]
 
 
 @router.get("/decisions", response_model=list[Decision])
@@ -154,8 +132,7 @@ def list_decisions(
 
 @router.post("/decisions", response_model=Decision, status_code=201)
 def record_decision(body: DecisionInput, handover: Handover, user: User):
-    if user.role == Role.viewer:
-        raise HTTPException(403, "Viewers cannot record decisions")
+    require_write_access(handover, user)
     return (
         supabase_admin.table("decisions")
         .insert({
